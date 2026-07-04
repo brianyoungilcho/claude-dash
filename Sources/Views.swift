@@ -106,7 +106,9 @@ struct DashboardView: View {
             .buttonStyle(.borderless)
             .help("Refresh all")
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
+        // Extra leading inset clears the titlebar close button (the panel uses
+        // fullSizeContentView, so content extends under the traffic lights).
+        .padding(.leading, 30).padding(.trailing, 12).padding(.vertical, 8)
     }
 
     private var emptyState: some View {
@@ -196,7 +198,7 @@ struct AccountRow: View {
                 if let weekly = u.weekly {
                     MetricLine(label: "Weekly", metric: weekly)
                 }
-                ForEach(u.scoped, id: \.name) { s in
+                ForEach(Array(u.scoped.enumerated()), id: \.offset) { _, s in
                     MetricLine(label: s.name, metric: s.metric)
                 }
             }
@@ -314,7 +316,9 @@ struct AddAccountView: View {
                 Text(errorText).font(.system(size: 11)).foregroundStyle(.red)
             }
 
-            if !orgs.isEmpty {
+            // The org is fixed for an existing account — replacing its key must
+            // not pretend the org can be switched (that's remove + re-add).
+            if !isEditing && !orgs.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Organization").font(.system(size: 11, weight: .medium))
                     Picker("", selection: $selectedOrg) {
@@ -365,9 +369,8 @@ struct AddAccountView: View {
     }
 
     private var canCommit: Bool {
-        guard selectedOrg != nil else { return false }
-        if isEditing { return true }
-        return selectedProfile != nil
+        if isEditing { return !orgs.isEmpty }   // validated; org is fixed to the account's
+        return selectedOrg != nil && selectedProfile != nil
     }
 
     private func validate() {
@@ -415,9 +418,13 @@ struct AddAccountView: View {
             } catch let e as UsageError {
                 await MainActor.run {
                     committing = false
-                    let orgName = editing?.orgName ?? selectedOrg?.name ?? "this organization"
-                    errorText = "Usage check failed for “\(orgName)”: \(e.display)." +
-                        (orgs.count > 1 ? " Try a different organization from the list." : "")
+                    if let editing {
+                        errorText = "This key can't read usage for “\(editing.orgName)”: \(e.display). Paste a sessionKey from the login that owns this account — or remove the account and re-add it under the right organization."
+                    } else {
+                        let orgName = selectedOrg?.name ?? "this organization"
+                        errorText = "Usage check failed for “\(orgName)”: \(e.display)." +
+                            (orgs.count > 1 ? " Try a different organization from the list." : "")
+                    }
                 }
             } catch {
                 await MainActor.run { committing = false; errorText = error.localizedDescription }

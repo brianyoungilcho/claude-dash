@@ -22,16 +22,21 @@ Requires macOS 13+ and the Xcode Command Line Tools
 (`xcode-select --install` — one-time, no full Xcode needed).
 
 ```bash
-git clone <REPO_URL> && cd claude-dash && ./install.sh
+git clone https://github.com/heybaro/claude-dash.git && cd claude-dash && ./install.sh
 ```
 
 That's it: builds a universal binary into `/Applications/Claude Dash.app`,
-launches it, and it registers itself to start at login. Local builds have no
-Gatekeeper friction.
+launches it, and it registers itself to start at login (once — if you disable
+that in System Settings, your choice sticks). Local builds have no Gatekeeper
+friction. To upgrade: `git pull && ./install.sh`.
 
-> **Prebuilt zip from Releases instead?** After unzipping, right-click →
-> Open the app the first time (it's ad-hoc signed, not notarized), or run
-> `xattr -dr com.apple.quarantine "/Applications/Claude Dash.app"`.
+> **Prebuilt zip from Releases instead?** The app is ad-hoc signed, not
+> notarized, so on current macOS the "right-click → Open" trick does NOT work.
+> Do this instead: unzip, **drag `Claude Dash.app` into `/Applications`**
+> (required — running it from Downloads breaks start-at-login via App
+> Translocation), then clear quarantine:
+> `xattr -dr com.apple.quarantine "/Applications/Claude Dash.app"` and open it.
+> Building from source avoids all of this and is the recommended path.
 
 ## Add an account
 
@@ -92,6 +97,9 @@ defaults delete com.claudedash.app
 security delete-generic-password -s com.claudedash.sessionkey || true  # repeat until "not found"
 ```
 
+Then remove the stale "Claude Dash" entry under **System Settings → General →
+Login Items**, if one remains.
+
 ## Development
 
 | Path | Contents |
@@ -102,12 +110,20 @@ security delete-generic-password -s com.claudedash.sessionkey || true  # repeat 
 | `Sources/main.swift` | App bootstrap, floating panel, menu-bar controller, login item |
 | `build.sh` | Universal (arm64+x86_64) build + bundle + ad-hoc sign |
 | `Tests/main.swift` | Headless tests: parsing (real captured fixtures), Keychain, live endpoint |
-| `Preview/main.swift` | Renders the views to PNG (`OUT=dir ./.build/preview`) for design review |
+| `Preview/main.swift` | Renders the views to PNG for design review |
 | `Assets/gen-icon.swift` | Regenerates the app icon |
 
 ```bash
-# run tests
+mkdir -p .build
+
+# run tests (parsing fixtures, Keychain round-trip, live endpoint check)
 swiftc -swift-version 5 -o .build/tests Tests/main.swift Sources/Core.swift && ./.build/tests
+
+# render the views to PNGs (Preview has its own main.swift, so exclude Sources/main.swift)
+swiftc -swift-version 5 -o .build/preview Preview/main.swift \
+  Sources/Core.swift Sources/AppModel.swift Sources/Views.swift \
+  -framework AppKit -framework SwiftUI
+OUT=/tmp ./.build/preview
 ```
 
 MIT licensed.

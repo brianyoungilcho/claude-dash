@@ -119,8 +119,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func statusClicked(_ sender: NSStatusBarButton) {
-        let rightClick = NSApp.currentEvent?.type == .rightMouseUp
-        if rightClick { showStatusMenu() } else { togglePanel() }
+        let event = NSApp.currentEvent
+        let secondary = event?.type == .rightMouseUp
+            || (event?.modifierFlags.contains(.control) ?? false)   // Control-click = secondary click
+        if secondary { showStatusMenu() } else { togglePanel() }
     }
 
     private func showStatusMenu() {
@@ -143,12 +145,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Self-register as a login item so the dashboard survives reboots.
+    /// Only auto-registers ONCE — if the user later disables it in
+    /// System Settings → Login Items, their choice sticks.
     private func registerLoginItem() {
+        let flag = "didAutoRegisterLoginItem"
+        guard !UserDefaults.standard.bool(forKey: flag) else { return }
         let svc = SMAppService.mainApp
-        guard svc.status != .enabled else { return }
         do {
-            try svc.register()
-            dlog("login item: registered (status now \(svc.status.rawValue))")
+            if svc.status != .enabled { try svc.register() }
+            UserDefaults.standard.set(true, forKey: flag)
         } catch {
             dlog("login item: registration FAILED — \(error)")
         }
@@ -184,9 +189,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showAddAccount(editing: Account?) {
         if let existing = addWindow { existing.close(); addWindow = nil }
+        // onDone just closes; the willClose observer below is the single place
+        // that restores the accessory policy — so the red close button, Cancel,
+        // and a successful add all clean up identically.
         let view = AddAccountView(model: model, editing: editing) { [weak self] in
-            self?.addWindow?.close(); self?.addWindow = nil
-            NSApp.setActivationPolicy(.accessory)
+            self?.addWindow?.close()
         }
         let hosting = NSHostingController(rootView: view)
         let win = NSWindow(contentViewController: hosting)
@@ -194,6 +201,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         win.styleMask = [.titled, .closable]
         win.isReleasedWhenClosed = false
         win.center()
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: win, queue: .main
+        ) { [weak self] note in
+            NotificationCenter.default.removeObserver(self as Any, name: NSWindow.willCloseNotification,
+                                                      object: note.object)
+            MainActor.assumeIsolated {
+                self?.addWindow = nil
+                NSApp.setActivationPolicy(.accessory)
+            }
+        }
         addWindow = win
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)

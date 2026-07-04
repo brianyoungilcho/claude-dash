@@ -11,6 +11,9 @@ final class AppModel: ObservableObject {
     private let defaultsKey = "accounts_v1"
     private var pollTimer: Timer?
     private var notifiedAt90: Set<String> = []
+    // Bumped when an account's key changes or it's removed, so an in-flight
+    // fetch started under the old key/config can't overwrite fresh state.
+    private var fetchEpoch: [String: Int] = [:]
 
     init() {
         load()
@@ -56,19 +59,22 @@ final class AppModel: ObservableObject {
 
     /// Replace the session key for an existing account (the "Fix key" path).
     func updateKey(accountId: String, sessionKey: String) {
+        // The account may have been removed while the Replace window was open —
+        // don't write an orphaned secret nobody can ever delete.
+        guard let a = accounts.first(where: { $0.id == accountId }) else { return }
+        fetchEpoch[accountId, default: 0] += 1   // invalidate in-flight fetches with the old key
         let stored = Keychain.set(sessionKey, account: accountId)
         notifiedAt90.remove(accountId)
         guard stored else {
             usage[accountId] = .error("Couldn't save the key to the Keychain — try again")
             return
         }
-        if let a = accounts.first(where: { $0.id == accountId }) {
-            usage[accountId] = .unknown
-            Task { await refresh(a) }
-        }
+        usage[accountId] = .unknown
+        Task { await refresh(a) }
     }
 
     func removeAccount(_ account: Account) {
+        fetchEpoch[account.id, default: 0] += 1   // in-flight fetches must not resurrect it
         Keychain.delete(account: account.id)
         accounts.removeAll { $0.id == account.id }
         usage[account.id] = nil
@@ -87,24 +93,38 @@ final class AppModel: ObservableObject {
 
     func refresh(_ account: Account) async {
         let accountId = account.id
+        let epoch = fetchEpoch[accountId, default: 0]
         guard let key = await Task.detached(operation: { Keychain.get(account: accountId) }).value else {
             // Missing key = same recovery path as an expired one: the row shows
             // the red "replace session key" button.
             usage[account.id] = .unauthorized; return
         }
-        usage[account.id] = .loading
+        // Silent background refresh: keep showing known-good data during the
+        // round-trip instead of collapsing every row to a spinner each poll.
+        let previous = usage[accountId]
+        if case .ok = previous {} else { usage[accountId] = .loading }
         do {
             let u = try await UsageAPI.usage(sessionKey: key, orgUuid: account.orgUuid)
-            usage[account.id] = .ok(u)
+            guard fetchEpoch[accountId, default: 0] == epoch,
+                  accounts.contains(where: { $0.id == accountId }) else { return }
+            usage[accountId] = .ok(u)
             maybeNotify(account, u)
-        } catch let e as UsageError {
-            switch e {
-            case .unauthorized: usage[account.id] = .unauthorized
-            case .rateLimited:  usage[account.id] = .rateLimited
-            default:            usage[account.id] = .error(e.display)
-            }
         } catch {
-            usage[account.id] = .error(error.localizedDescription)
+            guard fetchEpoch[accountId, default: 0] == epoch,
+                  accounts.contains(where: { $0.id == accountId }) else { return }
+            let e = error as? UsageError
+            if e == .unauthorized {
+                usage[accountId] = .unauthorized   // key death always surfaces
+            } else if case .ok = previous {
+                // Transient failure (network blip, 429, 5xx): keep the last
+                // good snapshot rather than replacing data with an error row.
+            } else {
+                switch e {
+                case .rateLimited: usage[accountId] = .rateLimited
+                case .some(let ue): usage[accountId] = .error(ue.display)
+                case .none: usage[accountId] = .error(error.localizedDescription)
+                }
+            }
         }
     }
 
