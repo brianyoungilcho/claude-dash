@@ -102,9 +102,25 @@ if let enc = try? JSONEncoder().encode(nd), let dec = try? JSONDecoder().decode(
           && dec.accounts["id1"]?.text == "- [ ] renew key")
 } else { check("notes codable round-trip", false) }
 
-print("== 8. Claude Code: project-dir naming + hooks merge (temp fixture) ==")
-check("project dir display name", ClaudeCodeMonitor.displayName(forProjectDir: "-Users-alice-Desktop-Repo") == "Repo")
-check("path encoding mirrors CC", ClaudeCodeMonitor.encodeProjectPath("/Users/alice/my.app") == "-Users-alice-my-app")
+print("== 8. Claude Code: sessions from hook events + hooks merge (temp fixture) ==")
+let tmpEvents = FileManager.default.temporaryDirectory
+    .appendingPathComponent("cdash-events-\(UUID().uuidString).jsonl")
+let nowTs = Int(Date().timeIntervalSince1970)
+let eventsFixture = """
+{"event":"Stop","ts":\(nowTs - 7200),"payload":{"cwd":"/Users/alice/old_project"}}
+{"event":"Notification","ts":\(nowTs - 300),"payload":{"cwd":"/Users/alice/my_project"}}
+{"event":"Stop","ts":\(nowTs - 60),"payload":{"cwd":"/Users/alice/webapp"}}
+not json garbage line
+"""
+try! eventsFixture.data(using: .utf8)!.write(to: tmpEvents)
+let sessions = ClaudeCodeMonitor.sessionsFromEvents(eventsURL: tmpEvents)
+check("two sessions within the window (old one excluded)", sessions.count == 2)
+check("newest first", sessions.first?.projectDisplay == "webapp")
+check("waiting = last event is Notification", sessions.last?.waiting == true && sessions.last?.projectDisplay == "my_project")
+check("stopped session not waiting", sessions.first?.waiting == false)
+check("display name = cwd last component (underscores intact)", sessions.last?.projectDisplay == "my_project")
+try? FileManager.default.removeItem(at: tmpEvents)
+check("no events file → no sessions", ClaudeCodeMonitor.sessionsFromEvents(eventsURL: tmpEvents).isEmpty)
 let tmpSettings = FileManager.default.temporaryDirectory
     .appendingPathComponent("cdash-test-settings-\(UUID().uuidString).json")
 let existing: [String: Any] = [
@@ -155,10 +171,18 @@ for f in (try? FileManager.default.contentsOfDirectory(at: tmpNotes.deletingLast
     includingPropertiesForKeys: nil)) ?? [] where f.lastPathComponent.hasPrefix("notes.json.corrupt-") {
     try? FileManager.default.removeItem(at: f)
 }
-// 9c. Path encoding must mirror Claude Code's [^a-zA-Z0-9] rule.
-check("underscore encodes like CC", ClaudeCodeMonitor.encodeProjectPath("/Users/x/my_project") == "-Users-x-my-project")
-check("space encodes like CC", ClaudeCodeMonitor.encodeProjectPath("/Users/x/My App") == "-Users-x-My-App")
-check("match helper works", ClaudeCodeMonitor.matches(cwd: "/Users/x/my_project", projectDir: "-Users-x-my-project"))
+// 9c. Conversation freshness filter: only ≤48h items are signal.
+let cNow = Date()
+let convosFixture = [
+    Convo(uuid: "1", name: "old", updatedAt: cNow.addingTimeInterval(-3 * 86400), model: nil),
+    Convo(uuid: "2", name: "newest", updatedAt: cNow.addingTimeInterval(-600), model: nil),
+    Convo(uuid: "3", name: "yesterday", updatedAt: cNow.addingTimeInterval(-86400), model: nil),
+    Convo(uuid: "4", name: "no-date", updatedAt: nil, model: nil),
+]
+let recents = UsageAPI.recentConvos(convosFixture, now: cNow)
+check("stale + dateless conversations filtered out", recents.count == 2)
+check("sorted newest first regardless of input order", recents.first?.name == "newest" && recents.last?.name == "yesterday")
+check("empty when everything is stale", UsageAPI.recentConvos([convosFixture[0]], now: cNow).isEmpty)
 // 9d. hooksInstalled must survive JSONSerialization's slash escaping.
 let tmpSettings2 = FileManager.default.temporaryDirectory
     .appendingPathComponent("cdash-settings2-\(UUID().uuidString).json")

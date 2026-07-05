@@ -71,7 +71,7 @@ struct BoardContent: View {
                         )
                     }
                 }
-                if Prefs.ccMonitor && !ccSessions.isEmpty {
+                if !ccSessions.isEmpty {
                     card { ClaudeCodeSection(sessions: ccSessions) }
                 }
             }
@@ -118,7 +118,7 @@ struct BoardView: View {
             onAdd: onAdd,
             onEdit: onEdit,
             onPrefs: onPrefs,
-            onRefresh: { Task { await model.refreshAll() } },
+            onRefresh: { Task { await model.userRefresh() } },
             open: { model.openChrome($0, path: $1) },
             toggleFlag: { model.toggleFlag(accountId: $0.id) },
             remove: { model.removeAccount($0) },

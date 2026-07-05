@@ -25,10 +25,11 @@ at a glance, one click to open claude.ai in the right browser profile.
   remembers its frame, optional always-on-top, reopens at launch if you had
   it open.
 - **Signals** — each account shows its **recent claude.ai conversations**
-  (click to open one in the right profile), and a **Claude Code** section
-  shows local sessions — including *"waiting for your input"* if you opt in
-  to the bundled hooks (Preferences → Install). Notes and signals are all
-  local files; nothing leaves your Mac.
+  (last 48 hours only — no stale noise; click one to open it in the right
+  profile). Opt into the bundled Claude Code hooks (Preferences → Install)
+  and a **Claude Code** section shows your local sessions, including
+  *"waiting for your input."* Notes and signals are all local files; nothing
+  leaves your Mac.
 - **In-app sign-in** — adding an account opens a claude.ai login window and
   captures the session key automatically; no DevTools digging. (Manual
   cookie-paste still works.)
@@ -119,9 +120,10 @@ The menu-bar popover stays as the compact quick glance:
 Gear icon in the dashboard (or right-click → Preferences…): refresh interval,
 account sort order (added / most headroom / most used), menu-bar display mode,
 used-vs-remaining labels, notification threshold + reset alerts,
-launch-at-login, hotkey, board float behavior, conversations/Claude Code
-signal toggles, and the optional Claude Code hooks (installed by merging into
-`~/.claude/settings.json` with a backup; removable from the same place).
+launch-at-login, hotkey, board float behavior and text size, the
+conversations toggle, and the optional Claude Code hooks (installed by
+merging into `~/.claude/settings.json` with a backup; removable from the
+same place — the Claude Code section only exists while hooks are installed).
 
 Notes are stored in
 `~/Library/Application Support/Claude Dash/notes.json` — plain JSON, local

@@ -68,7 +68,12 @@ overwritten.
 
 **Why don't the conversations under an account update instantly?**
 They refresh every ~5 minutes (piggybacked on usage polls) to keep requests
-polite. Hit the refresh button for an immediate update.
+polite; the refresh button forces an immediate update.
+
+**Why is the conversations list empty (or missing chats I'd expect)?**
+It shows web chats from the last 48 hours only — older items are hidden as
+noise. Claude Code / API usage burns quota without creating web
+conversations, so a busy account can legitimately show none.
 
 **Is this an official Anthropic app?**
 No — unofficial, community-built. It reads the same internal endpoint the

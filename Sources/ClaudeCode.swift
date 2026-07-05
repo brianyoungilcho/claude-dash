@@ -1,17 +1,16 @@
 import Foundation
 
-/// Local Claude Code awareness. Two tiers:
-///  - zero-config: scan ~/.claude/projects for recently-active session
-///    transcripts (mtime-based "running / active Nm ago")
-///  - opt-in hooks: Notification/Stop hooks append JSONL events so the board
-///    can show "waiting for your input" — the real needs-attention signal.
-/// Everything is local file reading; nothing leaves the machine.
+/// Local Claude Code awareness — hooks-only by design. The section appears
+/// ONLY after the user opts into hooks (Preferences → Install): Notification /
+/// Stop events carry the real signal ("waiting for your input"), and the cwd
+/// in each event is a plain path — no directory-name guessing. Everything is
+/// local file reading; nothing leaves the machine.
 
 struct CCSession: Equatable, Identifiable {
-    var projectDisplay: String   // best-effort short name of the repo/dir
-    var projectDir: String       // the encoded dir name (stable identity)
+    var projectDisplay: String   // last path component of the session's cwd
+    var projectDir: String       // the full cwd (stable identity)
     var lastActivity: Date
-    var waiting: Bool = false    // Notification hook fired, not yet resumed
+    var waiting: Bool = false    // most recent event is a Notification
     var id: String { projectDir }
 }
 
@@ -23,45 +22,12 @@ enum ClaudeCodeMonitor {
     static var hookScript: URL { AppSupport.dir.appendingPathComponent("cc-hook.sh") }
     private static let hookMarker = "Claude Dash/cc-hook.sh"
 
-    /// Project transcript dirs encode the path with "-" separators
-    /// ("-Users-brian-Desktop-Repo"). Path components can themselves contain
-    /// hyphens, so full decoding is ambiguous — the last token is the display
-    /// name that's right in practice.
-    static func displayName(forProjectDir dir: String) -> String {
-        dir.split(separator: "-").last.map(String.init) ?? dir
-    }
-
-    /// Sessions with transcript activity in the last `window` seconds.
-    static func scan(window: TimeInterval = 3600, projectsDir: URL? = nil) -> [CCSession] {
-        let root = projectsDir ?? claudeDir.appendingPathComponent("projects")
-        let fm = FileManager.default
-        guard let projects = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else {
-            return []
-        }
-        var sessions: [CCSession] = []
-        let cutoff = Date().addingTimeInterval(-window)
-        for project in projects {
-            guard let files = try? fm.contentsOfDirectory(at: project,
-                                                          includingPropertiesForKeys: [.contentModificationDateKey]) else { continue }
-            let newest = files
-                .filter { $0.pathExtension == "jsonl" }
-                .compactMap { try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate }
-                .max()
-            if let newest, newest > cutoff {
-                let dir = project.lastPathComponent
-                sessions.append(CCSession(projectDisplay: displayName(forProjectDir: dir),
-                                          projectDir: dir, lastActivity: newest))
-            }
-        }
-        return applyEvents(to: sessions).sorted { $0.lastActivity > $1.lastActivity }
-    }
-
-    /// Overlay hook events: a session is "waiting" when its most recent event
-    /// is a Notification newer than any Stop AND newer than transcript activity
-    /// (transcript movement means the user already resumed it).
-    static func applyEvents(to sessions: [CCSession], eventsURL: URL? = nil) -> [CCSession] {
+    /// Sessions reconstructed purely from hook events within `window` seconds.
+    /// No hooks (or no recent events) → empty → the UI section disappears.
+    static func sessionsFromEvents(eventsURL: URL? = nil, window: TimeInterval = 3600,
+                                   now: Date = Date()) -> [CCSession] {
         let url = eventsURL ?? eventsFile
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return sessions }
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
         // Only the tail matters; the file is rotated by the hook script.
         var latest: [String: (event: String, ts: Date)] = [:]   // by cwd
         for line in text.components(separatedBy: "\n").suffix(500) where !line.isEmpty {
@@ -74,32 +40,15 @@ enum ClaudeCodeMonitor {
             if let existing = latest[cwd], existing.ts > ts { continue }
             latest[cwd] = (event, ts)
         }
-        return sessions.map { s in
-            var s = s
-            // Match events to sessions by comparing encoded cwd to project dir.
-            if let hit = latest.first(where: { matches(cwd: $0.key, projectDir: s.projectDir) })?.value {
-                s.waiting = hit.event == "Notification"
-                    && hit.ts > s.lastActivity.addingTimeInterval(-2)   // not superseded by resumed work
-                    && hit.ts.timeIntervalSinceNow > -3600
-                if hit.ts > s.lastActivity { s.lastActivity = hit.ts }
-            }
-            return s
+        let cutoff = now.addingTimeInterval(-window)
+        return latest.compactMap { cwd, hit in
+            guard hit.ts > cutoff else { return nil }
+            return CCSession(projectDisplay: URL(fileURLWithPath: cwd).lastPathComponent,
+                             projectDir: cwd,
+                             lastActivity: hit.ts,
+                             waiting: hit.event == "Notification")
         }
-    }
-
-    /// Mirror of Claude Code's real path→dirname encoding: every character
-    /// outside [a-zA-Z0-9] becomes "-" (verified against the CC 2.1.x binary:
-    /// `e.replace(/[^a-zA-Z0-9]/g,"-")`, truncated at 200 chars + hash suffix).
-    static func encodeProjectPath(_ path: String) -> String {
-        String(path.map { c in (c.isASCII && (c.isLetter || c.isNumber)) ? c : "-" })
-    }
-
-    /// CC truncates encoded paths at 200 chars and appends "-<hash>"; we can't
-    /// reproduce the hash, but the 200-char prefix still identifies the dir.
-    static func matches(cwd: String, projectDir: String) -> Bool {
-        let encoded = encodeProjectPath(cwd)
-        if encoded.count <= 200 { return encoded == projectDir }
-        return projectDir.hasPrefix(String(encoded.prefix(200)))
+        .sorted { $0.lastActivity > $1.lastActivity }
     }
 
     // MARK: Hook install / uninstall (opt-in; merges, never clobbers)

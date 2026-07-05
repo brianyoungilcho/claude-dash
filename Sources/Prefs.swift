@@ -108,9 +108,4 @@ enum Prefs {
         set { d.set(newValue, forKey: "showConversations") }
     }
 
-    /// Show local Claude Code session activity on the board.
-    static var ccMonitor: Bool {
-        get { d.object(forKey: "ccMonitor") == nil ? true : d.bool(forKey: "ccMonitor") }
-        set { d.set(newValue, forKey: "ccMonitor") }
-    }
 }

@@ -231,18 +231,23 @@ final class AppModel: ObservableObject {
         if let list = try? await UsageAPI.conversations(sessionKey: key, orgUuid: account.orgUuid),
            accounts.contains(where: { $0.id == account.id }) {
             convoFetchedAt[account.id] = Date()   // stamp on SUCCESS — failures retry next poll
-            convos[account.id] = list
+            convos[account.id] = UsageAPI.recentConvos(list)
         }
     }
 
-    /// Rescan local Claude Code activity (cheap directory stat walk).
+    /// User-initiated refresh: bypass the conversations' lazy 5-minute window
+    /// so the button actually refreshes everything visible.
+    func userRefresh() async {
+        convoFetchedAt.removeAll()
+        await refreshAll()
+        refreshClaudeCode()
+    }
+
+    /// Rebuild Claude Code sessions from hook events (empty unless the user
+    /// opted into hooks — the UI section hides itself).
     func refreshClaudeCode() {
-        guard Prefs.ccMonitor else {
-            if !ccSessions.isEmpty { ccSessions = [] }
-            return
-        }
-        let scanned = ClaudeCodeMonitor.scan()
-        if scanned != ccSessions { ccSessions = scanned }
+        let sessions = ClaudeCodeMonitor.sessionsFromEvents()
+        if sessions != ccSessions { ccSessions = sessions }
     }
 
     /// Burn-rate projection: at the current pace, when does session usage hit

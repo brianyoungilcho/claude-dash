@@ -92,18 +92,34 @@ struct NoteView: View {
     var body: some View {
         Group {
             if editing {
-                TextEditor(text: Binding(get: { text }, set: onChange))
-                    .font(.system(size: 11 * s))
-                    .scrollContentBackground(.hidden)
-                    .frame(minHeight: 44 * s, maxHeight: 140 * s)
-                    .focused($focused)
-                    .onChange(of: focused) { if !$0 { editing = false; onCommit() } }
+                VStack(alignment: .leading, spacing: 4 * s) {
+                    TextEditor(text: Binding(get: { text }, set: onChange))
+                        .font(.system(size: 11 * s))
+                        .scrollContentBackground(.hidden)
+                        .frame(minHeight: 52 * s, maxHeight: 160 * s)
+                        .focused($focused)
+                        .onChange(of: focused) { if !$0 { finishEditing() } }
+                    HStack(spacing: 6) {
+                        Text("Saves automatically · “- [ ] task” becomes a checkbox")
+                            .font(.system(size: 9 * s)).foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                        Spacer()
+                        Button("Done") { finishEditing() }
+                            .controlSize(.small)
+                            .keyboardShortcut(.return, modifiers: .command)
+                            .help("Finish editing (⌘⏎). Notes also save when you click away.")
+                    }
+                }
             } else if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text(placeholder)
-                    .font(.system(size: 11 * s)).foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                    .onTapGesture { editing = true; focused = true }
+                HStack(spacing: 5) {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 10 * s)).foregroundStyle(.tertiary)
+                    Text(placeholder)
+                        .font(.system(size: 11 * s)).foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture { editing = true; focused = true }
             } else {
                 VStack(alignment: .leading, spacing: 2 * s) {
                     ForEach(Array(NoteParser.lines(text).enumerated()), id: \.offset) { idx, line in
@@ -131,11 +147,21 @@ struct NoteView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
                 .onTapGesture { editing = true; focused = true }
+                .overlay(alignment: .topTrailing) {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 9 * s)).foregroundStyle(.quaternary)
+                }
             }
         }
         .padding(6 * s)
         .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.05)))
-        .help("Click to edit. Lines like “- [ ] task” become checkboxes.")
+        .help("Click to edit. Lines like “- [ ] task” become checkboxes. Saves automatically.")
+    }
+
+    private func finishEditing() {
+        editing = false
+        focused = false
+        onCommit()
     }
 }
 
@@ -213,7 +239,7 @@ struct DashboardView: View {
                             )
                             Divider()
                         }
-                        if Prefs.ccMonitor && !model.ccSessions.isEmpty {
+                        if !model.ccSessions.isEmpty {
                             ClaudeCodeSection(sessions: model.ccSessions)
                             Divider()
                         }
@@ -236,7 +262,7 @@ struct DashboardView: View {
             Button(action: onPrefs) { Image(systemName: "gearshape") }
                 .buttonStyle(.borderless)
                 .help("Preferences")
-            Button(action: { Task { await model.refreshAll() } }) {
+            Button(action: { Task { await model.userRefresh() } }) {
                 Image(systemName: "arrow.clockwise")
             }
             .buttonStyle(.borderless)
@@ -802,7 +828,6 @@ struct PreferencesView: View {
     @State private var hotkeyEnabled = Prefs.hotkeyEnabled
     @State private var launchAtLogin = false
     @State private var showConversations = Prefs.showConversations
-    @State private var ccMonitor = Prefs.ccMonitor
     @State private var boardFloats = Prefs.boardFloats
     @State private var boardTextScale = Prefs.boardTextScale
     @State private var hooksInstalled = ClaudeCodeMonitor.hooksInstalled()
@@ -827,7 +852,6 @@ struct PreferencesView: View {
             }
             Section {
                 Toggle("Show recent conversations per account", isOn: $showConversations)
-                Toggle("Show Claude Code activity", isOn: $ccMonitor)
                 Toggle("Board window stays on top", isOn: $boardFloats)
                 Picker("Board text size", selection: $boardTextScale) {
                     Text("Standard").tag(1.0)
@@ -836,8 +860,8 @@ struct PreferencesView: View {
                 }
                 HStack {
                     Text(hooksInstalled
-                         ? "Claude Code hooks installed — sessions report “waiting for input”"
-                         : "Install Claude Code hooks to see “waiting for your input”")
+                         ? "Claude Code hooks installed — active sessions and “waiting for your input” show on the board"
+                         : "Show Claude Code sessions on the board (“waiting for your input”) — installs two local hooks")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer()
@@ -886,8 +910,10 @@ struct PreferencesView: View {
         .onChange(of: menuBarMode) { v in Prefs.menuBarMode = v; model.objectWillChange.send() }
         .onChange(of: hotkeyEnabled) { v in Prefs.hotkeyEnabled = v; model.objectWillChange.send() }
         .onChange(of: launchAtLogin) { v in onLoginItemToggle(v) }
-        .onChange(of: showConversations) { v in Prefs.showConversations = v; model.objectWillChange.send() }
-        .onChange(of: ccMonitor) { v in Prefs.ccMonitor = v; model.refreshClaudeCode() }
+        .onChange(of: showConversations) { v in
+            Prefs.showConversations = v
+            if v { Task { await model.userRefresh() } } else { model.objectWillChange.send() }
+        }
         .onChange(of: boardFloats) { v in Prefs.boardFloats = v; model.objectWillChange.send() }
         .onChange(of: boardTextScale) { v in Prefs.boardTextScale = v; model.objectWillChange.send() }
     }

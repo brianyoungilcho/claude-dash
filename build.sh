@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 APP="/Applications/Claude Dash.app"
 BIN_NAME="ClaudeDash"
 BUILD="$ROOT/.build"
-VERSION="${CLAUDE_DASH_VERSION:-1.4.0}"
+VERSION="${CLAUDE_DASH_VERSION:-1.4.1}"
 
 echo "==> Compiling (arm64 + x86_64)"
 rm -rf "$BUILD"
