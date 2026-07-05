@@ -37,6 +37,12 @@ Requires macOS 13+ and the Xcode Command Line Tools
 git clone https://github.com/brianyoungilcho/claude-dash.git && cd claude-dash && ./install.sh
 ```
 
+Or via Homebrew (`--no-quarantine` because the app isn't notarized):
+
+```bash
+brew install --cask --no-quarantine brianyoungilcho/tap/claude-dash
+```
+
 That's it: builds a universal binary into `/Applications/Claude Dash.app`,
 launches it, and registers it to start at login (once — disable it in
 System Settings or Preferences and your choice sticks). Local builds have no
@@ -140,7 +146,7 @@ OUT=/tmp ./.build/preview
 CI builds both architectures and runs the test suite on every push; tagging
 `v*` builds and publishes a release zip automatically.
 
-**Roadmap / non-goals:** configurable hotkey and Homebrew tap are planned.
+**Roadmap / non-goals:** configurable hotkey is planned.
 Out of scope by design: local JSONL cost analytics (use
 [ccusage](https://github.com/ryoppippi/ccusage)), multi-provider quota
 tracking, Claude Code credential rotation.
