@@ -17,6 +17,15 @@ at a glance, one click to open claude.ai in the right browser profile.
   time. **Open** launches claude.ai in that account's browser profile.
 - **Burn-rate warning** — "at this pace, caps 12:09 PM" when your current
   session pace would hit the limit before the reset.
+- **Pin it into a board** — the pin button turns the popover into a
+  persistent, resizable window you keep open all day: per-account **notes**
+  (`- [ ] task` lines become checkboxes), a global scratchpad, and a manual
+  **attention flag** per account that also lights a dot in the menu bar.
+- **Signals** — each account shows its **recent claude.ai conversations**
+  (click to open one in the right profile), and a **Claude Code** section
+  shows local sessions — including *"waiting for your input"* if you opt in
+  to the bundled hooks (Preferences → Install). Notes and signals are all
+  local files; nothing leaves your Mac.
 - **In-app sign-in** — adding an account opens a claude.ai login window and
   captures the session key automatically; no DevTools digging. (Manual
   cookie-paste still works.)
@@ -103,7 +112,13 @@ Edit… → Sign in…** gets a fresh one in seconds.
 Gear icon in the dashboard (or right-click → Preferences…): refresh interval,
 account sort order (added / most headroom / most used), menu-bar display mode,
 used-vs-remaining labels, notification threshold + reset alerts,
-launch-at-login, hotkey.
+launch-at-login, hotkey, board float behavior, conversations/Claude Code
+signal toggles, and the optional Claude Code hooks (installed by merging into
+`~/.claude/settings.json` with a backup; removable from the same place).
+
+Notes are stored in
+`~/Library/Application Support/Claude Dash/notes.json` — plain JSON, local
+only, trivially backed up or synced with your own tooling.
 
 Power-user overrides via `defaults` (browser selection):
 
@@ -159,12 +174,12 @@ Login Items**, if one remains.
 mkdir -p .build
 
 # run tests
-swiftc -swift-version 5 -o .build/tests Tests/main.swift Sources/Core.swift && ./.build/tests
+swiftc -swift-version 5 -o .build/tests Tests/main.swift Sources/Core.swift Sources/Notes.swift Sources/ClaudeCode.swift && ./.build/tests
 
 # render the views to PNGs (Preview has its own main.swift, so exclude Sources/main.swift)
 swiftc -swift-version 5 -o .build/preview Preview/main.swift \
   Sources/Core.swift Sources/AppModel.swift Sources/Views.swift \
-  Sources/Prefs.swift Sources/WebSignIn.swift \
+  Sources/Prefs.swift Sources/WebSignIn.swift Sources/Notes.swift Sources/ClaudeCode.swift \
   -framework AppKit -framework SwiftUI -framework WebKit -framework UserNotifications
 OUT=/tmp ./.build/preview
 ```

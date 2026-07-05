@@ -49,14 +49,14 @@ in the right browser profile.
 - **Tests**:
   ```bash
   mkdir -p .build
-  swiftc -swift-version 5 -o .build/tests Tests/main.swift Sources/Core.swift && ./.build/tests
+  swiftc -swift-version 5 -o .build/tests Tests/main.swift Sources/Core.swift Sources/Notes.swift Sources/ClaudeCode.swift && ./.build/tests
   ```
   The live-endpoint and browser-profile checks self-skip when `$CI` is set.
 - **View renders** (design review without launching the app):
   ```bash
   swiftc -swift-version 5 -o .build/preview Preview/main.swift \
     Sources/Core.swift Sources/AppModel.swift Sources/Views.swift \
-    Sources/Prefs.swift Sources/WebSignIn.swift \
+    Sources/Prefs.swift Sources/WebSignIn.swift Sources/Notes.swift Sources/ClaudeCode.swift \
     -framework AppKit -framework SwiftUI -framework WebKit -framework UserNotifications
   OUT=/tmp ./.build/preview
   ```

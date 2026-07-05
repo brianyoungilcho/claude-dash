@@ -40,8 +40,11 @@ final class DashboardPanel: NSPanel {
 
     override var canBecomeKey: Bool { true }
 
-    /// Esc dismisses the panel.
+    /// Pinned boards ignore Esc; popovers dismiss.
+    var pinned = false
+
     override func cancelOperation(_ sender: Any?) {
+        guard !pinned else { return }
         if let onDismiss { onDismiss() } else { orderOut(nil) }
     }
 }
@@ -89,6 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 MainActor.assumeIsolated {
                     self?.renderStatusImage()
                     self?.syncHotkey()
+                    self?.applyPinState()
                     self?.resizePanelIfNeeded()
                 }
             }
@@ -115,6 +119,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hostingView = NSHostingView(rootView: root)
         panel = DashboardPanel(content: hostingView)
         panel.onDismiss = { [weak self] in self?.hidePanel() }
+        applyPinState(initial: true)
+    }
+
+    /// Popover mode: auto-sized, dismiss-on-outside-click, floats.
+    /// Board mode: resizable, persistent, remembers its frame, optional float.
+    private func applyPinState(initial: Bool = false) {
+        let pinned = model.boardPinned
+        guard panel.pinned != pinned || initial else {
+            // Pin unchanged — but the float preference may have flipped.
+            if pinned { panel.level = Prefs.boardFloats ? .floating : .normal }
+            return
+        }
+        panel.pinned = pinned
+        if pinned {
+            panel.styleMask.insert(.resizable)
+            panel.level = Prefs.boardFloats ? .floating : .normal
+            panel.setFrameAutosaveName("ClaudeDashBoard")
+            if !initial {
+                if let m = outsideClickMonitor { NSEvent.removeMonitor(m); outsideClickMonitor = nil }
+                if !panel.isVisible { panel.makeKeyAndOrderFront(nil) }
+            }
+        } else {
+            panel.styleMask.remove(.resizable)
+            panel.level = .floating
+            panel.setFrameAutosaveName("")   // popover position is computed, not remembered
+            if !initial, panel.isVisible {
+                // Snap back to compact popover under the status item.
+                let size = hostingView.fittingSize
+                panel.setContentSize(NSSize(width: 340, height: min(max(size.height, 120), 560)))
+                positionPanel()
+                if outsideClickMonitor == nil { installOutsideClickMonitor() }
+            }
+        }
     }
 
     private func togglePanel() {
@@ -122,19 +159,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showPanel() {
-        let size = hostingView.fittingSize
-        panel.setContentSize(NSSize(width: max(size.width, 340), height: min(max(size.height, 120), 600)))
-        positionPanel()
-        panel.makeKeyAndOrderFront(nil)
+        if model.boardPinned {
+            // Board: restore the remembered frame; user controls size/position.
+            panel.makeKeyAndOrderFront(nil)
+        } else {
+            let size = hostingView.fittingSize
+            panel.setContentSize(NSSize(width: max(size.width, 340), height: min(max(size.height, 120), 600)))
+            positionPanel()
+            panel.makeKeyAndOrderFront(nil)
+            if outsideClickMonitor == nil { installOutsideClickMonitor() }
+        }
         Task { await model.refreshAll() }
-        // Clicks in OTHER apps (i.e. outside the panel) dismiss it — the native
-        // menu-bar-popover feel. Clicks inside our own app don't hit this monitor.
-        if outsideClickMonitor == nil {
-            outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
-                matching: [.leftMouseDown, .rightMouseDown]
-            ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.hidePanel() }
-            }
+        model.refreshClaudeCode()
+    }
+
+    /// Clicks in OTHER apps (i.e. outside the panel) dismiss the popover — the
+    /// native menu-bar feel. Never installed in board mode.
+    private func installOutsideClickMonitor() {
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.hidePanel() }
         }
     }
 
@@ -143,10 +188,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let m = outsideClickMonitor { NSEvent.removeMonitor(m); outsideClickMonitor = nil }
     }
 
-    /// Keep the visible panel sized to its content — rows appear, disappear,
-    /// and grow (pace warnings, new metrics) while it's open.
+    /// Keep the visible POPOVER sized to its content — rows appear, disappear,
+    /// and grow while it's open. Pinned boards are user-sized; never fight them.
     private func resizePanelIfNeeded() {
-        guard panel.isVisible else { return }
+        guard panel.isVisible, !model.boardPinned else { return }
         let size = hostingView.fittingSize
         let target = NSSize(width: max(size.width, 340), height: min(max(size.height, 120), 600))
         guard abs(panel.frame.height - target.height) > 2 || abs(panel.frame.width - target.width) > 2 else { return }
@@ -252,7 +297,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // make the account initials near-invisible. Match the real bar appearance.
         let appearance = statusItem.button?.effectiveAppearance ?? NSApp.effectiveAppearance
         let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let view = MenuBarGaugesView(accounts: model.accounts, usage: model.usage, mode: Prefs.menuBarMode)
+        let view = MenuBarGaugesView(accounts: model.accounts, usage: model.usage,
+                                     mode: Prefs.menuBarMode, attention: model.anyAttention)
             .frame(height: 18)
             .environment(\.colorScheme, isDark ? .dark : .light)
         let renderer = ImageRenderer(content: view)

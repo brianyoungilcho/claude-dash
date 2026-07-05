@@ -65,6 +65,101 @@ struct MetricLine: View {
     }
 }
 
+// MARK: - Note (display mode renders checkboxes; click to edit)
+
+struct NoteView: View {
+    var text: String
+    var placeholder: String
+    var onChange: (String) -> Void
+
+    @State private var editing = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        Group {
+            if editing {
+                TextEditor(text: Binding(get: { text }, set: onChange))
+                    .font(.system(size: 11))
+                    .scrollContentBackground(.hidden)
+                    .frame(minHeight: 44, maxHeight: 140)
+                    .focused($focused)
+                    .onChange(of: focused) { if !$0 { editing = false } }
+            } else if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(placeholder)
+                    .font(.system(size: 11)).foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture { editing = true; focused = true }
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(NoteParser.lines(text).enumerated()), id: \.offset) { idx, line in
+                        switch line {
+                        case .checkbox(let done, let body):
+                            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                                Button {
+                                    onChange(NoteParser.toggle(text, line: idx))
+                                } label: {
+                                    Image(systemName: done ? "checkmark.square.fill" : "square")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(done ? Color.accentColor : .secondary)
+                                }
+                                .buttonStyle(.plain)
+                                Text(body)
+                                    .font(.system(size: 11))
+                                    .strikethrough(done)
+                                    .foregroundStyle(done ? .secondary : .primary)
+                            }
+                        case .plain(let body):
+                            Text(body.isEmpty ? " " : body).font(.system(size: 11))
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture { editing = true; focused = true }
+            }
+        }
+        .padding(6)
+        .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.05)))
+        .help("Click to edit. Lines like “- [ ] task” become checkboxes.")
+    }
+}
+
+// MARK: - Recent conversations (signals layer)
+
+struct ConvoList: View {
+    var convos: [Convo]
+    var open: (Convo) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(convos.prefix(3)) { c in
+                Button { open(c) } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "bubble.left").font(.system(size: 8))
+                            .foregroundStyle(.secondary)
+                        Text(c.name).font(.system(size: 10)).lineLimit(1)
+                        Spacer(minLength: 4)
+                        if let d = c.updatedAt {
+                            Text(relative(d)).font(.system(size: 9)).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .help("Open this conversation in the account's browser profile")
+            }
+        }
+    }
+
+    private func relative(_ d: Date) -> String {
+        let mins = Int(-d.timeIntervalSinceNow) / 60
+        if mins < 1 { return "now" }
+        if mins < 60 { return "\(mins)m" }
+        if mins < 1440 { return "\(mins / 60)h" }
+        return "\(mins / 1440)d"
+    }
+}
+
 // MARK: - Dashboard panel
 
 struct DashboardView: View {
@@ -82,15 +177,27 @@ struct DashboardView: View {
             } else {
                 ScrollView {
                     VStack(spacing: 0) {
+                        globalNote
+                        Divider()
                         ForEach(model.sortedAccounts) { account in
                             AccountRow(
                                 account: account,
                                 state: model.usage[account.id] ?? .unknown,
+                                noteText: model.notes.accounts[account.id]?.text ?? "",
+                                flagged: model.isFlagged(account.id),
+                                convos: Prefs.showConversations ? (model.convos[account.id] ?? []) : [],
                                 open: { model.openChrome(account, path: "/new") },
                                 openUsage: { model.openChrome(account, path: "/settings/usage") },
+                                openConvo: { model.openChrome(account, path: "/chat/\($0.uuid)") },
                                 edit: { onEdit(account) },
-                                remove: { model.removeAccount(account) }
+                                remove: { model.removeAccount(account) },
+                                toggleFlag: { model.toggleFlag(accountId: account.id) },
+                                noteChanged: { model.setNote(accountId: account.id, text: $0) }
                             )
+                            Divider()
+                        }
+                        if Prefs.ccMonitor && !model.ccSessions.isEmpty {
+                            ClaudeCodeSection(sessions: model.ccSessions)
                             Divider()
                         }
                     }
@@ -98,14 +205,24 @@ struct DashboardView: View {
             }
             footer
         }
-        .frame(width: 340)
-        .frame(maxHeight: 560)
+        .frame(minWidth: 340,
+               maxWidth: model.boardPinned ? .infinity : 340,
+               minHeight: model.boardPinned ? 260 : nil,
+               maxHeight: model.boardPinned ? .infinity : 560)
     }
 
     private var header: some View {
         HStack {
             Text("Claude Dash").font(.system(size: 13, weight: .semibold))
             Spacer()
+            Button(action: { model.boardPinned.toggle() }) {
+                Image(systemName: model.boardPinned ? "pin.fill" : "pin")
+                    .foregroundStyle(model.boardPinned ? Color.accentColor : Color.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help(model.boardPinned
+                  ? "Unpin — back to a quick-glance popover"
+                  : "Pin as a board — stays open, resizable")
             Button(action: onPrefs) { Image(systemName: "gearshape") }
                 .buttonStyle(.borderless)
                 .help("Preferences")
@@ -116,6 +233,13 @@ struct DashboardView: View {
             .help("Refresh all")
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
+    }
+
+    private var globalNote: some View {
+        NoteView(text: model.notes.global,
+                 placeholder: "Scratchpad — what's going on across everything…",
+                 onChange: { model.setGlobalNote($0) })
+            .padding(.horizontal, 12).padding(.vertical, 8)
     }
 
     private var emptyState: some View {
@@ -152,20 +276,36 @@ struct DashboardView: View {
 struct AccountRow: View {
     var account: Account
     var state: UsageState
+    var noteText: String = ""
+    var flagged: Bool = false
+    var convos: [Convo] = []
     var open: () -> Void
     var openUsage: () -> Void
+    var openConvo: (Convo) -> Void = { _ in }
     var edit: () -> Void
     var remove: () -> Void
+    var toggleFlag: () -> Void = {}
+    var noteChanged: (String) -> Void = { _ in }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
+                    if flagged {
+                        Image(systemName: "flag.fill")
+                            .font(.system(size: 9)).foregroundStyle(.orange)
+                    }
                     Text(account.displayName).font(.system(size: 12, weight: .semibold))
                     Spacer()
                     statusBadge
                 }
                 content
+                if !convos.isEmpty {
+                    ConvoList(convos: convos, open: openConvo)
+                }
+                NoteView(text: noteText,
+                         placeholder: "What am I working on here…",
+                         onChange: noteChanged)
                 Text(account.chromeProfileLabel)
                     .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
             }
@@ -176,6 +316,7 @@ struct AccountRow: View {
                 .controlSize(.small)
                 .help("Open claude.ai in \(account.chromeProfileLabel)")
                 Menu {
+                    Button(flagged ? "Clear attention flag" : "Flag for attention", action: toggleFlag)
                     Button("Edit…", action: edit)
                     Button("Open usage page", action: openUsage)
                     Divider()
@@ -190,15 +331,20 @@ struct AccountRow: View {
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 9)
+        .background(flagged ? Color.orange.opacity(0.06) : Color.clear)
+        .overlay(alignment: .leading) {
+            if flagged { Rectangle().fill(Color.orange).frame(width: 2) }
+        }
         .contextMenu {
             Button("Open claude.ai", action: open)
             Button("Open usage page", action: openUsage)
+            Button(flagged ? "Clear attention flag" : "Flag for attention", action: toggleFlag)
             Button("Edit…", action: edit)
             Divider()
             Button("Remove account", role: .destructive, action: remove)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Account \(account.displayName)")
+        .accessibilityLabel("Account \(account.displayName)\(flagged ? ", flagged for attention" : "")")
     }
 
     @ViewBuilder private var content: some View {
@@ -265,15 +411,59 @@ struct AccountRow: View {
     }
 }
 
+// MARK: - Claude Code section (local sessions; separate because CLI identity
+// doesn't map 1:1 onto claude.ai accounts — same email can own several orgs)
+
+struct ClaudeCodeSection: View {
+    var sessions: [CCSession]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("CLAUDE CODE")
+                .font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+            ForEach(sessions) { s in
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(s.waiting ? Color.orange : activityColor(s))
+                        .frame(width: 7, height: 7)
+                    Text(s.projectDisplay).font(.system(size: 11, weight: .medium))
+                    Spacer()
+                    Text(s.waiting ? "waiting for your input" : relative(s.lastActivity))
+                        .font(.system(size: 10))
+                        .foregroundStyle(s.waiting ? .orange : .secondary)
+                }
+                .accessibilityLabel("Claude Code in \(s.projectDisplay): \(s.waiting ? "waiting for your input" : "active \(relative(s.lastActivity))")")
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
+    }
+
+    private func activityColor(_ s: CCSession) -> Color {
+        -s.lastActivity.timeIntervalSinceNow < 180 ? .green : .secondary.opacity(0.5)
+    }
+
+    private func relative(_ d: Date) -> String {
+        let mins = Int(-d.timeIntervalSinceNow) / 60
+        if mins < 1 { return "active now" }
+        if mins < 60 { return "\(mins)m ago" }
+        return "\(mins / 60)h ago"
+    }
+}
+
 // MARK: - Menu bar gauges (rendered to an image)
 
 struct MenuBarGaugesView: View {
     var accounts: [Account]
     var usage: [String: UsageState]
     var mode: Prefs.MenuBarMode = .all
+    var attention: Bool = false
 
     var body: some View {
         HStack(spacing: 7) {
+            if attention {
+                Circle().fill(Color.orange).frame(width: 5, height: 5)
+                    .accessibilityLabel("Something needs your attention")
+            }
             switch mode {
             case .icon:
                 gaugeGlyph
@@ -596,6 +786,11 @@ struct PreferencesView: View {
     @State private var menuBarMode = Prefs.menuBarMode
     @State private var hotkeyEnabled = Prefs.hotkeyEnabled
     @State private var launchAtLogin = false
+    @State private var showConversations = Prefs.showConversations
+    @State private var ccMonitor = Prefs.ccMonitor
+    @State private var boardFloats = Prefs.boardFloats
+    @State private var hooksInstalled = ClaudeCodeMonitor.hooksInstalled
+    @State private var hooksError: String?
 
     var body: some View {
         Form {
@@ -613,6 +808,33 @@ struct PreferencesView: View {
                     ForEach(Prefs.MenuBarMode.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
                 Toggle("Show remaining % instead of used %", isOn: $showRemaining)
+            }
+            Section {
+                Toggle("Show recent conversations per account", isOn: $showConversations)
+                Toggle("Show Claude Code activity", isOn: $ccMonitor)
+                Toggle("Pinned board floats above other windows", isOn: $boardFloats)
+                HStack {
+                    Text(hooksInstalled
+                         ? "Claude Code hooks installed — sessions report “waiting for input”"
+                         : "Install Claude Code hooks to see “waiting for your input”")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button(hooksInstalled ? "Remove" : "Install…") {
+                        do {
+                            if hooksInstalled { try ClaudeCodeMonitor.uninstallHooks() }
+                            else { try ClaudeCodeMonitor.installHooks() }
+                            hooksInstalled = ClaudeCodeMonitor.hooksInstalled
+                            hooksError = nil
+                        } catch {
+                            hooksError = error.localizedDescription
+                        }
+                    }
+                    .controlSize(.small)
+                }
+                if let hooksError {
+                    Text(hooksError).font(.system(size: 10)).foregroundStyle(.red)
+                }
             }
             Section {
                 Picker("Notify at", selection: $notifyThreshold) {
@@ -643,5 +865,8 @@ struct PreferencesView: View {
         .onChange(of: menuBarMode) { v in Prefs.menuBarMode = v; model.objectWillChange.send() }
         .onChange(of: hotkeyEnabled) { v in Prefs.hotkeyEnabled = v; model.objectWillChange.send() }
         .onChange(of: launchAtLogin) { v in onLoginItemToggle(v) }
+        .onChange(of: showConversations) { v in Prefs.showConversations = v; model.objectWillChange.send() }
+        .onChange(of: ccMonitor) { v in Prefs.ccMonitor = v; model.refreshClaudeCode() }
+        .onChange(of: boardFloats) { v in Prefs.boardFloats = v; model.objectWillChange.send() }
     }
 }

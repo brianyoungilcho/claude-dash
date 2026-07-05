@@ -56,28 +56,56 @@ MainActor.assumeIsolated {
         .environment(\.colorScheme, .dark)
         .background(Color(white: 0.12)), "\(out)/menubar-empty.png", scale: 4)
 
-    // The dashboard panel body (header + rows), light + dark.
+    // The dashboard panel body (header + rows), light + dark — board flavor
+    // with notes, conversations, flags, and the Claude Code section.
+    let sampleConvos: [String: [Convo]] = [
+        "a": [Convo(uuid: "1", name: "Draft the launch email", updatedAt: now.addingTimeInterval(-540), model: nil),
+              Convo(uuid: "2", name: "Debug webhook retries", updatedAt: now.addingTimeInterval(-7200), model: nil)],
+        "b": [Convo(uuid: "3", name: "Q3 roadmap review", updatedAt: now.addingTimeInterval(-300), model: nil)],
+    ]
+    let sampleNotes: [String: (String, Bool)] = [
+        "a": ("- [x] ship v1.2\n- [ ] write release notes", false),
+        "b": ("Waiting on legal review before publishing.", true),
+    ]
+    let ccSessions = [
+        CCSession(projectDisplay: "claude-dash", projectDir: "-u-claude-dash",
+                  lastActivity: now.addingTimeInterval(-45), waiting: false),
+        CCSession(projectDisplay: "webapp", projectDir: "-u-webapp",
+                  lastActivity: now.addingTimeInterval(-360), waiting: true),
+    ]
+
     func panel(_ scheme: ColorScheme) -> some View {
         VStack(spacing: 0) {
             HStack {
                 Text("Claude Dash").font(.system(size: 13, weight: .semibold))
                 Spacer()
+                Image(systemName: "pin.fill").foregroundStyle(.tint)
                 Image(systemName: "gearshape")
                 Image(systemName: "arrow.clockwise")
             }.padding(.horizontal, 12).padding(.vertical, 8)
             Divider()
+            NoteView(text: "Focus this week: launch + KBR sitemap fix",
+                     placeholder: "Scratchpad…", onChange: { _ in })
+                .padding(.horizontal, 12).padding(.vertical, 8)
+            Divider()
             ForEach(accounts) { acct in
                 AccountRow(account: acct, state: usage[acct.id] ?? .unknown,
-                           open: {}, openUsage: {}, edit: {}, remove: {})
+                           noteText: sampleNotes[acct.id]?.0 ?? "",
+                           flagged: sampleNotes[acct.id]?.1 ?? false,
+                           convos: sampleConvos[acct.id] ?? [],
+                           open: {}, openUsage: {}, openConvo: { _ in },
+                           edit: {}, remove: {}, toggleFlag: {}, noteChanged: { _ in })
                 Divider()
             }
+            ClaudeCodeSection(sessions: ccSessions)
+            Divider()
             HStack {
                 Text("Add account…").font(.system(size: 12)).foregroundStyle(.tint)
                 Spacer()
                 Text("Updated 9:41 PM").font(.system(size: 10)).foregroundStyle(.secondary)
             }.padding(.horizontal, 12).padding(.vertical, 7)
         }
-        .frame(width: 340)
+        .frame(width: 360)
         .background(scheme == .dark ? Color(white: 0.13) : Color(white: 0.97))
         .environment(\.colorScheme, scheme)
     }

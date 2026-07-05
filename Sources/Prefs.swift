@@ -73,4 +73,30 @@ enum Prefs {
     static func pctLabel(_ utilization: Double) -> String {
         showRemaining ? "\(Int((100 - utilization).rounded()))% left" : "\(Int(utilization))%"
     }
+
+    // MARK: Board & signals
+
+    /// Board pinned open (persisted so it reopens the way you left it).
+    static var boardPinned: Bool {
+        get { d.bool(forKey: "boardPinned") }
+        set { d.set(newValue, forKey: "boardPinned") }
+    }
+
+    /// Pinned board floats above other windows.
+    static var boardFloats: Bool {
+        get { d.object(forKey: "boardFloats") == nil ? true : d.bool(forKey: "boardFloats") }
+        set { d.set(newValue, forKey: "boardFloats") }
+    }
+
+    /// Show recent claude.ai conversations under each account.
+    static var showConversations: Bool {
+        get { d.object(forKey: "showConversations") == nil ? true : d.bool(forKey: "showConversations") }
+        set { d.set(newValue, forKey: "showConversations") }
+    }
+
+    /// Show local Claude Code session activity on the board.
+    static var ccMonitor: Bool {
+        get { d.object(forKey: "ccMonitor") == nil ? true : d.bool(forKey: "ccMonitor") }
+        set { d.set(newValue, forKey: "ccMonitor") }
+    }
 }

@@ -10,6 +10,11 @@ final class AppModel: ObservableObject {
     @Published private(set) var lastRefresh: Date?
     /// Bumped once a minute so reset countdowns stay live between polls.
     @Published private(set) var displayTick = 0
+    /// Board layer: notes, pin state, per-account conversations, Claude Code sessions.
+    @Published private(set) var notes: NotesData = NotesStore.load()
+    @Published var boardPinned: Bool = Prefs.boardPinned { didSet { Prefs.boardPinned = boardPinned } }
+    @Published private(set) var convos: [String: [Convo]] = [:]
+    @Published private(set) var ccSessions: [CCSession] = []
 
     private let defaultsKey = "accounts_v1"
     private var pollTimer: Timer?
@@ -21,22 +26,68 @@ final class AppModel: ObservableObject {
     private var fetchEpoch: [String: Int] = [:]
     // Last (utilization, time) sample per account, for burn-rate projection.
     private var lastSample: [String: (util: Double, at: Date)] = [:]
+    private var convoFetchedAt: [String: Date] = [:]
+    private var notesSaveTask: Task<Void, Never>?
 
     init() {
         load()
         for a in accounts { usage[a.id] = .unknown }
     }
 
-    /// Accounts in the user's preferred order. Sorting keys off last-known
-    /// session usage; unknown states sort last in the usage-based modes.
+    /// Accounts in the user's preferred order (flagged accounts always first).
+    /// Sorting keys off last-known session usage; unknown states sort last in
+    /// the usage-based modes.
     var sortedAccounts: [Account] {
+        let base: [Account]
         switch Prefs.sortMode {
         case .manual:
-            return accounts
+            base = accounts
         case .headroom:
-            return accounts.sorted { sessionPct($0) ?? 101 < sessionPct($1) ?? 101 }
+            base = accounts.sorted { sessionPct($0) ?? 101 < sessionPct($1) ?? 101 }
         case .used:
-            return accounts.sorted { sessionPct($0) ?? -1 > sessionPct($1) ?? -1 }
+            base = accounts.sorted { sessionPct($0) ?? -1 > sessionPct($1) ?? -1 }
+        }
+        return base.sorted { isFlagged($0.id) && !isFlagged($1.id) }   // stable sort
+    }
+
+    func isFlagged(_ id: String) -> Bool { notes.accounts[id]?.flagged == true }
+
+    /// Anything anywhere that needs the user: manual flag, dead key, or a
+    /// Claude Code session waiting for input.
+    var anyAttention: Bool {
+        accounts.contains { isFlagged($0.id) || usage[$0.id] == .unauthorized }
+            || ccSessions.contains(where: \.waiting)
+    }
+
+    // MARK: Notes
+
+    func setNote(accountId: String, text: String) {
+        var n = notes.accounts[accountId] ?? AccountNote()
+        n.text = text
+        n.updatedAt = Date()
+        notes.accounts[accountId] = n
+        scheduleNotesSave()
+    }
+
+    func setGlobalNote(_ text: String) {
+        notes.global = text
+        scheduleNotesSave()
+    }
+
+    func toggleFlag(accountId: String) {
+        var n = notes.accounts[accountId] ?? AccountNote()
+        n.flagged.toggle()
+        notes.accounts[accountId] = n
+        scheduleNotesSave()
+    }
+
+    private func scheduleNotesSave() {
+        notesSaveTask?.cancel()
+        let snapshot = notes
+        notesSaveTask = Task {
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard !Task.isCancelled else { return }
+            NotesStore.save(snapshot)
         }
     }
 
@@ -108,9 +159,12 @@ final class AppModel: ObservableObject {
         Keychain.delete(account: account.id)
         accounts.removeAll { $0.id == account.id }
         usage[account.id] = nil
+        convos[account.id] = nil
         notifiedThreshold.remove(account.id)
         cappedAwaitingReset.remove(account.id)
         lastSample[account.id] = nil
+        notes.accounts[account.id] = nil
+        scheduleNotesSave()
         persist()
     }
 
@@ -142,6 +196,7 @@ final class AppModel: ObservableObject {
             usage[accountId] = .ok(u)
             lastRefresh = Date()
             maybeNotify(account, u)
+            await maybeFetchConversations(account, key: key)
         } catch {
             guard fetchEpoch[accountId, default: 0] == epoch,
                   accounts.contains(where: { $0.id == accountId }) else { return }
@@ -159,6 +214,29 @@ final class AppModel: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Conversations are context, not telemetry — refresh them lazily (every
+    /// 5 minutes per account, piggybacked on a successful usage fetch).
+    private func maybeFetchConversations(_ account: Account, key: String) async {
+        guard Prefs.showConversations else { return }
+        let last = convoFetchedAt[account.id] ?? .distantPast
+        guard Date().timeIntervalSince(last) > 300 else { return }
+        convoFetchedAt[account.id] = Date()
+        if let list = try? await UsageAPI.conversations(sessionKey: key, orgUuid: account.orgUuid),
+           accounts.contains(where: { $0.id == account.id }) {
+            convos[account.id] = list
+        }
+    }
+
+    /// Rescan local Claude Code activity (cheap directory stat walk).
+    func refreshClaudeCode() {
+        guard Prefs.ccMonitor else {
+            if !ccSessions.isEmpty { ccSessions = [] }
+            return
+        }
+        let scanned = ClaudeCodeMonitor.scan()
+        if scanned != ccSessions { ccSessions = scanned }
     }
 
     /// Burn-rate projection: at the current pace, when does session usage hit
@@ -219,8 +297,12 @@ final class AppModel: ObservableObject {
         tickTimer?.invalidate()
         tickTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             guard let self else { return }
-            Task { @MainActor in self.displayTick &+= 1 }
+            Task { @MainActor in
+                self.displayTick &+= 1
+                self.refreshClaudeCode()
+            }
         }
+        refreshClaudeCode()
     }
 
     /// Re-arm the poll timer after a preferences change.

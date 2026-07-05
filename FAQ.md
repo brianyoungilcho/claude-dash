@@ -53,6 +53,23 @@ Turn it off in Preferences. (Configurable combos are on the roadmap.)
 Both read the same source; the dashboard polls on an interval (default 1 min),
 so brief divergence right after heavy usage is expected. Hit refresh to sync.
 
+**Where are my notes stored? Do they sync?**
+`~/Library/Application Support/Claude Dash/notes.json` — plain JSON on this
+Mac only. No cloud, no sync, nothing sent anywhere. Back the file up (or sync
+it yourself) if the notes matter.
+
+**What do the Claude Code hooks actually do?**
+Optional (Preferences → Install). They add two entries to
+`~/.claude/settings.json` (a backup is written first) that append one JSON
+line per event to a local file, so the board can show "waiting for your
+input." They run locally, add ~no overhead, and Remove in Preferences puts
+everything back. Your existing hooks are preserved — entries are merged, not
+overwritten.
+
+**Why don't the conversations under an account update instantly?**
+They refresh every ~5 minutes (piggybacked on usage polls) to keep requests
+polite. Hit the refresh button for an immediate update.
+
 **Is this an official Anthropic app?**
 No — unofficial, community-built. It reads the same internal endpoint the
 claude.ai usage page uses, which can change without notice. If every account
