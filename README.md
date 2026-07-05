@@ -55,6 +55,32 @@ Gatekeeper friction. Upgrade with `git pull && ./install.sh`.
 > start-at-login via App Translocation), then clear quarantine:
 > `xattr -dr com.apple.quarantine "/Applications/Claude Dash.app"` and open it.
 
+### Not comfortable with the terminal? Install with an AI assistant
+
+If you use an AI agent that can run commands on your Mac (Claude Code, Claude
+Desktop with computer access, Codex, etc.), just paste this prompt and it will
+handle everything:
+
+```text
+Install Claude Dash (a free, open-source macOS menu-bar app that shows Claude
+usage limits across multiple accounts) from
+https://github.com/brianyoungilcho/claude-dash on this Mac.
+
+1. Read https://raw.githubusercontent.com/brianyoungilcho/claude-dash/main/AGENTS.md
+   and follow its install section.
+2. Check for Xcode Command Line Tools first (xcode-select -p). If they're
+   missing, run xcode-select --install, warn me that a macOS dialog will pop
+   up, and wait until I tell you it has finished.
+3. Clone the repository and run ./install.sh from its root.
+4. Verify success: a small gauge icon appears in the menu bar at the top-right
+   of my screen. Then walk me through adding my first Claude account
+   (right-click the icon → Add Account…).
+
+Explain each step before you run it. If you can't run commands on my computer,
+give me the exact Terminal commands to type, one at a time. Talk to me in the
+language I normally write in.
+```
+
 ## Add an account
 
 ![Add account](docs/add-account.png)
@@ -150,5 +176,19 @@ CI builds both architectures and runs the test suite on every push; tagging
 Out of scope by design: local JSONL cost analytics (use
 [ccusage](https://github.com/ryoppippi/ccusage)), multi-provider quota
 tracking, Claude Code credential rotation.
+
+## Credits
+
+Created and maintained by [Brian Cho](https://github.com/brianyoungilcho).
+To cite this project, use GitHub's **"Cite this repository"** button (backed
+by [CITATION.cff](CITATION.cff)) — and if it saved you a rate-limit headache,
+a ⭐ helps others find it.
+
+- The claude.ai usage-endpoint approach was informed by
+  [Claude Usage Tracker](https://github.com/hamed-elfayome/Claude-Usage-Tracker)
+  by [@hamed-elfayome](https://github.com/hamed-elfayome) (MIT) — its recipe
+  was studied and reimplemented from scratch here; no code was copied.
+- Built with [Claude Code](https://claude.com/claude-code) (Anthropic).
+- Not affiliated with or endorsed by Anthropic.
 
 MIT licensed.

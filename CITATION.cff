@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata from this file."
+title: "Claude Dash"
+type: software
+authors:
+  - family-names: "Cho"
+    given-names: "Brian"
+repository-code: "https://github.com/brianyoungilcho/claude-dash"
+url: "https://github.com/brianyoungilcho/claude-dash"
+license: MIT
+keywords:
+  - claude
+  - macos
+  - menu-bar
+  - usage-tracking
