@@ -1,20 +1,32 @@
 # Claude Dash
 
+![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Release](https://img.shields.io/github/v/release/brianyoungilcho/claude-dash)
+
 One menu-bar app for juggling multiple Claude accounts: every account's usage
-at a glance, and one click to open claude.ai in the right browser profile.
+at a glance, one click to open claude.ai in the right browser profile.
 
 ![Dashboard](docs/panel-dark.png)
 
-- **Menu-bar gauges** — a mini usage bar per account, always visible.
-- **Floating dashboard** — click the menu-bar icon: every account with its
-  **5-hour session** bar (+ reset countdown), **weekly** limit, and any
-  **per-model weekly caps** (e.g. Fable) — each with its own reset time.
-  The **Open** button launches claude.ai in that account's browser profile.
+- **Menu-bar gauges** — a mini usage bar per account, always visible
+  (or tightest-account-only / icon-only, your pick).
+- **Floating dashboard** — every account with its **5-hour session** bar
+  (+ reset countdown), **weekly** limit, **per-model weekly caps** (e.g.
+  Fable), and **extra-usage credits** when enabled — each with its own reset
+  time. **Open** launches claude.ai in that account's browser profile.
+- **Burn-rate warning** — "at this pace, caps 12:09 PM" when your current
+  session pace would hit the limit before the reset.
+- **In-app sign-in** — adding an account opens a claude.ai login window and
+  captures the session key automatically; no DevTools digging. (Manual
+  cookie-paste still works.)
 - **Same email, multiple workspaces?** Fine — usage is tracked per
   *organization*; pick the org when adding the account.
-- Keys are stored in the **macOS Keychain**, never on disk. Threshold
-  notification when an account crosses 90% of its session limit.
-- Works with **Chrome, Brave, Edge, or Chromium** profiles (auto-detected).
+- **Notifications** — configurable threshold alert, plus a "session reset —
+  good to go" ping for capped accounts.
+- Keys live in the **macOS Keychain**, never on disk. Works with **Chrome,
+  Brave, Edge, or Chromium** profiles. Global hotkey **⌃⌥⌘D**. Universal
+  binary (Apple Silicon + Intel).
 
 ## Install
 
@@ -22,71 +34,68 @@ Requires macOS 13+ and the Xcode Command Line Tools
 (`xcode-select --install` — one-time, no full Xcode needed).
 
 ```bash
-git clone https://github.com/heybaro/claude-dash.git && cd claude-dash && ./install.sh
+git clone https://github.com/brianyoungilcho/claude-dash.git && cd claude-dash && ./install.sh
 ```
 
 That's it: builds a universal binary into `/Applications/Claude Dash.app`,
-launches it, and it registers itself to start at login (once — if you disable
-that in System Settings, your choice sticks). Local builds have no Gatekeeper
-friction. To upgrade: `git pull && ./install.sh`.
+launches it, and registers it to start at login (once — disable it in
+System Settings or Preferences and your choice sticks). Local builds have no
+Gatekeeper friction. Upgrade with `git pull && ./install.sh`.
 
-> **Prebuilt zip from Releases instead?** The app is ad-hoc signed, not
-> notarized, so on current macOS the "right-click → Open" trick does NOT work.
-> Do this instead: unzip, **drag `Claude Dash.app` into `/Applications`**
-> (required — running it from Downloads breaks start-at-login via App
-> Translocation), then clear quarantine:
+> **Prebuilt zip from [Releases](https://github.com/brianyoungilcho/claude-dash/releases)
+> instead?** The app is ad-hoc signed, not notarized, so "right-click → Open"
+> does NOT work on current macOS. Instead: unzip, **drag `Claude Dash.app`
+> into `/Applications`** (required — running from Downloads breaks
+> start-at-login via App Translocation), then clear quarantine:
 > `xattr -dr com.apple.quarantine "/Applications/Claude Dash.app"` and open it.
-> Building from source avoids all of this and is the recommended path.
 
 ## Add an account
 
 ![Add account](docs/add-account.png)
 
-1. Menu-bar gauge icon → right-click → **Add Account…**
-2. In the browser profile that's logged into that Claude account: open
-   `claude.ai` → DevTools (⌥⌘I) → **Application → Cookies →
-   https://claude.ai** → copy the `sessionKey` value (starts with `sk-ant-`).
-3. Paste → **Validate key** → pick the **organization** (chat orgs are listed
-   first; API-console orgs are labeled and won't work for usage) → pick the
-   **browser profile** → **Add account**. Usage is verified live before the
-   account is saved, so a wrong org fails loudly at this step, not silently
-   later.
+1. Menu-bar gauge icon → right-click → **Add Account…** (or the dashboard's
+   "Add account…" button).
+2. Click **Sign in…** and log into the Claude account — the session key is
+   captured automatically and validated. (Manual fallback: copy the
+   `sessionKey` cookie from DevTools in that browser profile.)
+3. Pick the **organization** (chat orgs listed first; API-console orgs are
+   labeled and can't serve usage) and the **browser profile** it should open
+   with. Usage is verified live before saving, so a wrong pick fails loudly
+   here, not silently later.
 
-Session keys expire periodically. When one does, the row turns red with a
-**Replace session key** button — repeat step 2 for that account (~1 minute).
+Session keys rotate periodically. When one dies, the row turns red — **⋯ →
+Edit… → Sign in…** gets a fresh one in seconds.
 
-## Configuration
+## Preferences
 
-Everything has sensible defaults; overrides via `defaults`:
+Gear icon in the dashboard (or right-click → Preferences…): refresh interval,
+account sort order (added / most headroom / most used), menu-bar display mode,
+used-vs-remaining labels, notification threshold + reset alerts,
+launch-at-login, hotkey.
+
+Power-user overrides via `defaults` (browser selection):
 
 ```bash
-# Use a specific Chromium-family browser instead of the auto-detected one:
 defaults write com.claudedash.app browserAppName "Brave Browser"
 defaults write com.claudedash.app browserSupportSubpath "BraveSoftware/Brave-Browser"
 ```
 
-Polling is every 60s. Notification threshold is 90% of the session limit.
-
-## How it works / troubleshooting
+## How it works
 
 Usage comes from claude.ai's internal
-`GET /api/organizations/{orgUuid}/usage`, authenticated by the session-key
-cookie (the same endpoint the claude.ai usage page uses). It returns
-percentages, not token counts. Being an internal endpoint, it can change
-without notice — if all accounts suddenly error, check for a newer Claude
-Dash; the whole network layer is one function (`UsageAPI` in
-`Sources/Core.swift`).
+`GET /api/organizations/{orgUuid}/usage` — the same endpoint the claude.ai
+usage page reads — authenticated by the session-key cookie. It returns
+percentages, not token counts. The parser prefers the modern `limits[]` array
+(session / weekly_all / per-model weekly_scoped) with legacy-field fallback,
+so new model caps appear automatically.
 
-- **"Session key expired" right after adding** — the claude.ai tab you copied
-  the cookie from was probably logged out; reload it, confirm you're logged
-  in, copy the fresh `sessionKey`.
-- **Keychain**: keys are stored via `/usr/bin/security` so the ad-hoc-signed
-  app never triggers keychain password prompts across rebuilds. Consequence:
-  the items are readable by CLI tools running as your user — the same model
-  Claude Code uses for its own credentials.
-- **No accounts in the org picker** — that login has no organizations
-  (unusual); log into claude.ai in the browser first.
-- Debug log (exceptions only): `/tmp/claudedash-debug.log`.
+**Disclaimer:** unofficial, community-built, not affiliated with Anthropic.
+The endpoint is internal and can change without notice — if every account
+errors at once, check for a newer release. Session keys grant full account
+access: they're stored only in your local Keychain and sent only to claude.ai.
+Use at your own risk.
+
+More: [FAQ](FAQ.md) · [Uninstall](#uninstall) · [Development](#development)
 
 ## Uninstall
 
@@ -105,25 +114,35 @@ Login Items**, if one remains.
 | Path | Contents |
 |------|----------|
 | `Sources/Core.swift` | Models, Keychain (via `security` CLI), browser/profile discovery, `UsageAPI` |
-| `Sources/AppModel.swift` | Observable state, polling, add/remove/open actions |
-| `Sources/Views.swift` | SwiftUI: dashboard, metric rows, gauges, add-account sheet |
-| `Sources/main.swift` | App bootstrap, floating panel, menu-bar controller, login item |
+| `Sources/AppModel.swift` | Observable state, polling, pace projection, notifications |
+| `Sources/Views.swift` | SwiftUI: dashboard, metric rows, add/edit sheets, preferences |
+| `Sources/Prefs.swift` | Typed UserDefaults settings |
+| `Sources/WebSignIn.swift` | In-app claude.ai login window (isolated cookie store) |
+| `Sources/main.swift` | App bootstrap, floating panel, menu bar, hotkey, update check |
 | `build.sh` | Universal (arm64+x86_64) build + bundle + ad-hoc sign |
-| `Tests/main.swift` | Headless tests: parsing (real captured fixtures), Keychain, live endpoint |
+| `Tests/main.swift` | Headless tests (CI-safe; live-endpoint check runs locally) |
 | `Preview/main.swift` | Renders the views to PNG for design review |
-| `Assets/gen-icon.swift` | Regenerates the app icon |
 
 ```bash
 mkdir -p .build
 
-# run tests (parsing fixtures, Keychain round-trip, live endpoint check)
+# run tests
 swiftc -swift-version 5 -o .build/tests Tests/main.swift Sources/Core.swift && ./.build/tests
 
 # render the views to PNGs (Preview has its own main.swift, so exclude Sources/main.swift)
 swiftc -swift-version 5 -o .build/preview Preview/main.swift \
   Sources/Core.swift Sources/AppModel.swift Sources/Views.swift \
-  -framework AppKit -framework SwiftUI
+  Sources/Prefs.swift Sources/WebSignIn.swift \
+  -framework AppKit -framework SwiftUI -framework WebKit -framework UserNotifications
 OUT=/tmp ./.build/preview
 ```
+
+CI builds both architectures and runs the test suite on every push; tagging
+`v*` builds and publishes a release zip automatically.
+
+**Roadmap / non-goals:** configurable hotkey and Homebrew tap are planned.
+Out of scope by design: local JSONL cost analytics (use
+[ccusage](https://github.com/ryoppippi/ccusage)), multi-provider quota
+tracking, Claude Code credential rotation.
 
 MIT licensed.

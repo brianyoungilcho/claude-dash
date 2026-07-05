@@ -22,12 +22,13 @@ func render<V: View>(_ view: V, _ path: String, scale: CGFloat = 3) {
 MainActor.assumeIsolated {
     let out = ProcessInfo.processInfo.environment["OUT"] ?? "."
 
-    let a = Account(id: "a", displayName: "pupsday", orgUuid: "1", orgName: "pupsday.com",
-                    chromeProfileDir: "Profile 2", chromeProfileLabel: "pupsday.com — brian@pupsday.com")
-    let b = Account(id: "b", displayName: "heybaro", orgUuid: "2", orgName: "heybaro.com",
-                    chromeProfileDir: "Default", chromeProfileLabel: "heybaro.com — brian@heybaro.com")
-    let c = Account(id: "c", displayName: "trychae", orgUuid: "3", orgName: "trychae.com",
-                    chromeProfileDir: "Profile 7", chromeProfileLabel: "trychae.com — baro@trychae.com")
+    // Generic sample data — these renders ship in the public README.
+    let a = Account(id: "a", displayName: "Personal", orgUuid: "1", orgName: "Personal",
+                    chromeProfileDir: "Default", chromeProfileLabel: "Personal — alice@example.com")
+    let b = Account(id: "b", displayName: "Work", orgUuid: "2", orgName: "Acme Inc",
+                    chromeProfileDir: "Profile 1", chromeProfileLabel: "Work — alice@acme.com")
+    let c = Account(id: "c", displayName: "Team", orgUuid: "3", orgName: "Acme Team",
+                    chromeProfileDir: "Profile 2", chromeProfileLabel: "Team — bot@acme.com")
 
     let now = Date()
     let usage: [String: UsageState] = [
@@ -35,10 +36,12 @@ MainActor.assumeIsolated {
                               weekly: UsageMetric(utilization: 41, resetsAt: now.addingTimeInterval(400000)),
                               scoped: [ScopedMetric(name: "Fable", metric: UsageMetric(utilization: 12, resetsAt: now.addingTimeInterval(560000)))],
                               fetchedAt: now)),
-        "b": .ok(AccountUsage(session: UsageMetric(utilization: 91, resetsAt: now.addingTimeInterval(1500)),
+        "b": .ok(AccountUsage(session: UsageMetric(utilization: 91, resetsAt: now.addingTimeInterval(5400)),
                               weekly: UsageMetric(utilization: 78, resetsAt: now.addingTimeInterval(400000)),
                               scoped: [ScopedMetric(name: "Fable", metric: UsageMetric(utilization: 96, resetsAt: now.addingTimeInterval(560000)))],
-                              fetchedAt: now)),
+                              extra: ExtraUsage(percent: 22, usedDisplay: "4.40 USD used"),
+                              fetchedAt: now,
+                              projectedCap: now.addingTimeInterval(2700))),
         "c": .unauthorized,
     ]
     let accounts = [a, b, c]
@@ -48,23 +51,24 @@ MainActor.assumeIsolated {
         .environment(\.colorScheme, .dark)
         .background(Color(white: 0.12)), "\(out)/menubar-dark.png", scale: 4)
 
-    // Empty state (what it shows right now, before any account is added).
+    // Empty state (before any account is added).
     render(MenuBarGaugesView(accounts: [], usage: [:]).frame(height: 18).padding(4)
         .environment(\.colorScheme, .dark)
         .background(Color(white: 0.12)), "\(out)/menubar-empty.png", scale: 4)
 
-    // The dashboard panel body (header + rows), light + dark
+    // The dashboard panel body (header + rows), light + dark.
     func panel(_ scheme: ColorScheme) -> some View {
         VStack(spacing: 0) {
             HStack {
                 Text("Claude Dash").font(.system(size: 13, weight: .semibold))
                 Spacer()
+                Image(systemName: "gearshape")
                 Image(systemName: "arrow.clockwise")
             }.padding(.horizontal, 12).padding(.vertical, 8)
             Divider()
             ForEach(accounts) { acct in
                 AccountRow(account: acct, state: usage[acct.id] ?? .unknown,
-                           open: {}, openUsage: {}, fixKey: {}, remove: {})
+                           open: {}, openUsage: {}, edit: {}, remove: {})
                 Divider()
             }
             HStack {
@@ -81,8 +85,13 @@ MainActor.assumeIsolated {
     render(panel(.light), "\(out)/panel-light.png", scale: 3)
     render(panel(.dark), "\(out)/panel-dark.png", scale: 3)
 
-    // Add-account sheet — verify the instruction caption wraps instead of truncating.
-    render(AddAccountView(model: AppModel(), editing: nil, onDone: {})
+    // Add-account sheet.
+    render(AddAccountView(model: AppModel(), onDone: {})
         .background(Color(white: 0.15))
         .environment(\.colorScheme, .dark), "\(out)/add-account.png", scale: 3)
+
+    // Edit sheet.
+    render(EditAccountView(model: AppModel(), account: b, onDone: {})
+        .background(Color(white: 0.15))
+        .environment(\.colorScheme, .dark), "\(out)/edit-account.png", scale: 3)
 }

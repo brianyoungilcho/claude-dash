@@ -1,0 +1,25 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile app (both architectures)
+        run: |
+          mkdir -p .build
+          for arch in arm64 x86_64; do
+            swiftc -O -swift-version 5 -target "${arch}-apple-macos13.0" \
+              -o ".build/ClaudeDash-$arch" Sources/*.swift \
+              -framework AppKit -framework SwiftUI -framework Security \
+              -framework ServiceManagement -framework WebKit -framework Carbon \
+              -framework UserNotifications
+          done
+      - name: Run tests
+        run: |
+          swiftc -swift-version 5 -o .build/tests Tests/main.swift Sources/Core.swift
+          ./.build/tests

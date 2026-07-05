@@ -1,0 +1,59 @@
+# FAQ
+
+**The app is running but there's no icon in the menu bar.**
+Three usual causes: (1) On macOS 26+, menu-bar items need per-app permission —
+check **System Settings → Menu Bar** and make sure Claude Dash is allowed.
+(2) A crowded menu bar (especially on notched MacBooks) silently hides items
+that don't fit — quit something or ⌘-drag icons to make room. (3) In
+Preferences, "Menu bar shows: All accounts" grows with each account; switch to
+"Tightest account only" or "Icon only" if you track many.
+
+**macOS says the app is damaged / can't be opened (downloaded zip).**
+The prebuilt zip is ad-hoc signed, not notarized, and "right-click → Open" no
+longer bypasses Gatekeeper on modern macOS. Move the app to `/Applications`
+first, then run:
+`xattr -dr com.apple.quarantine "/Applications/Claude Dash.app"`.
+Building from source (`./install.sh`) avoids this entirely.
+
+**Why does an account keep saying "session key expired"?**
+Session keys rotate. The fastest fix is the row's **⋯ → Edit… → Sign in…**
+button, which captures a fresh key automatically. If you copy cookies manually,
+reload claude.ai first and confirm you're logged in — a logged-out tab shows a
+stale cookie.
+
+**The Sign in… window rejects my Google login.**
+Some identity providers refuse embedded web views. Fall back to the manual
+path: in the browser profile that's logged in, open claude.ai → DevTools (⌥⌘I)
+→ Application → Cookies → `https://claude.ai` → copy the `sessionKey` value and
+paste it.
+
+**Where are my session keys stored?**
+In your macOS login Keychain (service `com.claudedash.sessionkey`), written via
+Apple's `security` tool so the ad-hoc-signed app never triggers keychain
+password prompts. Trade-off: like Claude Code's own credentials, the items are
+readable by CLI tools running as your user. Keys never touch disk in cleartext
+and are only ever sent to claude.ai.
+
+**Which browsers work?**
+Chromium-family browsers with profiles: Chrome, Brave, Edge, Chromium
+(auto-detected in that order). Override:
+```
+defaults write com.claudedash.app browserAppName "Brave Browser"
+defaults write com.claudedash.app browserSupportSubpath "BraveSoftware/Brave-Browser"
+```
+Safari, Firefox, and Arc don't expose Chromium-style profile switching.
+
+**Can I move the icon in the menu bar?**
+macOS owns menu-bar ordering — ⌘-drag the icon wherever you like.
+
+**The ⌃⌥⌘D hotkey conflicts with another app.**
+Turn it off in Preferences. (Configurable combos are on the roadmap.)
+
+**Numbers look different from claude.ai's usage page.**
+Both read the same source; the dashboard polls on an interval (default 1 min),
+so brief divergence right after heavy usage is expected. Hit refresh to sync.
+
+**Is this an official Anthropic app?**
+No — unofficial, community-built. It reads the same internal endpoint the
+claude.ai usage page uses, which can change without notice. If every account
+errors at once, check for a newer release.

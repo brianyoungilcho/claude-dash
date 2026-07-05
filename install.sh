@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Claude Dash installer — builds from source into /Applications.
 # Usage:
-#   git clone https://github.com/heybaro/claude-dash.git && cd claude-dash && ./install.sh
+#   git clone https://github.com/brianyoungilcho/claude-dash.git && cd claude-dash && ./install.sh
 # Re-run after `git pull` to upgrade (restarts the app on the new build).
 
 if ! xcode-select -p >/dev/null 2>&1; then

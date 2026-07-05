@@ -1,23 +1,48 @@
 import Foundation
 import AppKit
 import Combine
+import UserNotifications
 
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var accounts: [Account] = []
     @Published private(set) var usage: [String: UsageState] = [:]   // by account id
     @Published private(set) var lastRefresh: Date?
+    /// Bumped once a minute so reset countdowns stay live between polls.
+    @Published private(set) var displayTick = 0
 
     private let defaultsKey = "accounts_v1"
     private var pollTimer: Timer?
-    private var notifiedAt90: Set<String> = []
+    private var tickTimer: Timer?
+    private var notifiedThreshold: Set<String> = []
+    private var cappedAwaitingReset: Set<String> = []
     // Bumped when an account's key changes or it's removed, so an in-flight
     // fetch started under the old key/config can't overwrite fresh state.
     private var fetchEpoch: [String: Int] = [:]
+    // Last (utilization, time) sample per account, for burn-rate projection.
+    private var lastSample: [String: (util: Double, at: Date)] = [:]
 
     init() {
         load()
         for a in accounts { usage[a.id] = .unknown }
+    }
+
+    /// Accounts in the user's preferred order. Sorting keys off last-known
+    /// session usage; unknown states sort last in the usage-based modes.
+    var sortedAccounts: [Account] {
+        switch Prefs.sortMode {
+        case .manual:
+            return accounts
+        case .headroom:
+            return accounts.sorted { sessionPct($0) ?? 101 < sessionPct($1) ?? 101 }
+        case .used:
+            return accounts.sorted { sessionPct($0) ?? -1 > sessionPct($1) ?? -1 }
+        }
+    }
+
+    private func sessionPct(_ a: Account) -> Double? {
+        if case .ok(let u) = usage[a.id] { return u.session?.utilization }
+        return nil
     }
 
     // MARK: Persistence (config only; keys are in the Keychain)
@@ -53,24 +78,29 @@ final class AppModel: ObservableObject {
             usage[id] = .unknown
             Task { await refresh(acct) }
         } else {
-            usage[id] = .error("Couldn't save the key to the Keychain — try Replace session key")
+            usage[id] = .error("Couldn't save the key to the Keychain — try Edit → replace key")
         }
     }
 
-    /// Replace the session key for an existing account (the "Fix key" path).
-    func updateKey(accountId: String, sessionKey: String) {
-        // The account may have been removed while the Replace window was open —
-        // don't write an orphaned secret nobody can ever delete.
-        guard let a = accounts.first(where: { $0.id == accountId }) else { return }
-        fetchEpoch[accountId, default: 0] += 1   // invalidate in-flight fetches with the old key
-        let stored = Keychain.set(sessionKey, account: accountId)
-        notifiedAt90.remove(accountId)
-        guard stored else {
-            usage[accountId] = .error("Couldn't save the key to the Keychain — try again")
-            return
+    /// Update display name / browser profile, and optionally replace the key.
+    func updateAccount(id: String, displayName: String, profile: ChromeProfile?, newSessionKey: String?) {
+        guard let idx = accounts.firstIndex(where: { $0.id == id }) else { return }
+        if !displayName.isEmpty { accounts[idx].displayName = displayName }
+        if let p = profile {
+            accounts[idx].chromeProfileDir = p.dir
+            accounts[idx].chromeProfileLabel = p.label
         }
-        usage[accountId] = .unknown
-        Task { await refresh(a) }
+        persist()
+        if let key = newSessionKey, !key.isEmpty {
+            fetchEpoch[id, default: 0] += 1   // invalidate in-flight fetches with the old key
+            notifiedThreshold.remove(id)
+            guard Keychain.set(key, account: id) else {
+                usage[id] = .error("Couldn't save the key to the Keychain — try again")
+                return
+            }
+            usage[id] = .unknown
+        }
+        Task { await refresh(accounts[idx]) }
     }
 
     func removeAccount(_ account: Account) {
@@ -78,7 +108,9 @@ final class AppModel: ObservableObject {
         Keychain.delete(account: account.id)
         accounts.removeAll { $0.id == account.id }
         usage[account.id] = nil
-        notifiedAt90.remove(account.id)
+        notifiedThreshold.remove(account.id)
+        cappedAwaitingReset.remove(account.id)
+        lastSample[account.id] = nil
         persist()
     }
 
@@ -95,18 +127,17 @@ final class AppModel: ObservableObject {
         let accountId = account.id
         let epoch = fetchEpoch[accountId, default: 0]
         guard let key = await Task.detached(operation: { Keychain.get(account: accountId) }).value else {
-            // Missing key = same recovery path as an expired one: the row shows
-            // the red "replace session key" button.
-            usage[account.id] = .unauthorized; return
+            usage[accountId] = .unauthorized; return
         }
         // Silent background refresh: keep showing known-good data during the
         // round-trip instead of collapsing every row to a spinner each poll.
         let previous = usage[accountId]
         if case .ok = previous {} else { usage[accountId] = .loading }
         do {
-            let u = try await UsageAPI.usage(sessionKey: key, orgUuid: account.orgUuid)
+            var u = try await UsageAPI.usage(sessionKey: key, orgUuid: account.orgUuid)
             guard fetchEpoch[accountId, default: 0] == epoch,
                   accounts.contains(where: { $0.id == accountId }) else { return }
+            u.projectedCap = projectCap(accountId: accountId, usage: u)
             usage[accountId] = .ok(u)
             maybeNotify(account, u)
         } catch {
@@ -128,26 +159,60 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Burn-rate projection from two consecutive samples: at the current pace,
+    /// when does session usage hit 100%? Only returned when that lands before
+    /// the reset (otherwise the reset saves you and there's nothing to warn about).
+    private func projectCap(accountId: String, usage u: AccountUsage) -> Date? {
+        guard let util = u.session?.utilization else { return nil }
+        defer { lastSample[accountId] = (util, u.fetchedAt) }
+        guard let prev = lastSample[accountId] else { return nil }
+        let dt = u.fetchedAt.timeIntervalSince(prev.at)
+        let dUtil = util - prev.util
+        guard dt > 0, dUtil > 0.1, util < 100 else { return nil }
+        let projected = u.fetchedAt.addingTimeInterval((100 - util) / (dUtil / dt))
+        guard let reset = u.session?.resetsAt, projected < reset else { return nil }
+        return projected
+    }
+
+    // MARK: Notifications
+
     private func maybeNotify(_ account: Account, _ u: AccountUsage) {
         let pct = u.session?.utilization ?? 0
-        if pct >= 90, !notifiedAt90.contains(account.id) {
-            notifiedAt90.insert(account.id)
+        let threshold = Prefs.notifyThreshold
+
+        if threshold > 0, pct >= Double(threshold), !notifiedThreshold.contains(account.id) {
+            notifiedThreshold.insert(account.id)
+            cappedAwaitingReset.insert(account.id)
             Notifier.post(title: "\(account.displayName) at \(Int(pct))%",
                           body: "5-hour session limit almost reached.")
         }
-        if pct < 80 { notifiedAt90.remove(account.id) }   // re-arm after it resets
+        if pct < Double(max(threshold - 10, 10)) {
+            notifiedThreshold.remove(account.id)   // re-arm after the window resets
+            if cappedAwaitingReset.remove(account.id) != nil, Prefs.notifyOnReset {
+                Notifier.post(title: "\(account.displayName) session reset",
+                              body: "Usage is back to \(Int(pct))% — good to go.")
+            }
+        }
     }
 
     // MARK: Polling
 
-    func startPolling(interval: TimeInterval = 60) {
+    func startPolling() {
         pollTimer?.invalidate()
         Task { await refreshAll() }
-        pollTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+        pollTimer = Timer.scheduledTimer(withTimeInterval: Prefs.pollInterval, repeats: true) { [weak self] _ in
             guard let self else { return }
             Task { await self.refreshAll() }
         }
+        tickTimer?.invalidate()
+        tickTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in self.displayTick &+= 1 }
+        }
     }
+
+    /// Re-arm the poll timer after a preferences change.
+    func applyPrefsChange() { startPolling() }
 
     // MARK: Open in the browser
 
@@ -161,11 +226,23 @@ final class AppModel: ObservableObject {
     }
 }
 
+/// UNUserNotificationCenter wrapper (NSUserNotification is long deprecated).
 enum Notifier {
+    private static var authRequested = false
+
     static func post(title: String, body: String) {
-        let n = NSUserNotification()
-        n.title = title
-        n.informativeText = body
-        NSUserNotificationCenter.default.deliver(n)
+        let center = UNUserNotificationCenter.current()
+        let fire = {
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = body
+            center.add(UNNotificationRequest(identifier: UUID().uuidString,
+                                             content: content, trigger: nil))
+        }
+        if authRequested { fire(); return }
+        authRequested = true
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            if granted { fire() }
+        }
     }
 }

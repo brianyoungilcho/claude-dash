@@ -15,12 +15,23 @@ struct ScopedMetric: Equatable {
     var metric: UsageMetric
 }
 
+/// Paid extra-usage / overage state (only rendered when enabled on the account).
+struct ExtraUsage: Equatable {
+    var percent: Double
+    var usedDisplay: String?    // e.g. "$3.50 used"
+}
+
 /// A snapshot of an account's usage at a point in time.
 struct AccountUsage: Equatable {
     var session: UsageMetric?       // rolling 5-hour window
     var weekly: UsageMetric?        // 7-day, all models
     var scoped: [ScopedMetric] = [] // per-model weekly caps (Fable, …)
+    var extra: ExtraUsage?          // overage credits, when enabled
     var fetchedAt: Date
+    /// Projected moment the session cap is hit at the current burn rate,
+    /// set by the model when it has two samples to compare. Only meaningful
+    /// (and only shown) when it lands before the session reset.
+    var projectedCap: Date?
 }
 
 /// The live state of a single account's usage fetch.
@@ -291,8 +302,33 @@ enum UsageAPI {
 
         if usage.session == nil { usage.session = metric(obj["five_hour"]) }
         if usage.weekly == nil { usage.weekly = metric(obj["seven_day"]) }
+        usage.extra = extraUsage(obj)
         guard usage.session != nil || usage.weekly != nil || !usage.scoped.isEmpty else { return nil }
         return usage
+    }
+
+    /// Overage credits: prefer the modern `spend` object, fall back to `extra_usage`.
+    private static func extraUsage(_ obj: [String: Any]) -> ExtraUsage? {
+        if let spend = obj["spend"] as? [String: Any], spend["enabled"] as? Bool == true {
+            let pct = number(spend["percent"]) ?? 0
+            var display: String?
+            if let used = spend["used"] as? [String: Any],
+               let minor = number(used["amount_minor"]) {
+                let exponent = number(used["exponent"]) ?? 2
+                let currency = (used["currency"] as? String) ?? "USD"
+                display = String(format: "%.2f %@ used", minor / pow(10, exponent), currency)
+            }
+            return ExtraUsage(percent: pct, usedDisplay: display)
+        }
+        if let extra = obj["extra_usage"] as? [String: Any], extra["is_enabled"] as? Bool == true {
+            let pct = number(extra["utilization"]) ?? 0
+            var display: String?
+            if let used = number(extra["used_credits"]) {
+                display = String(format: "%.2f used", used)
+            }
+            return ExtraUsage(percent: pct, usedDisplay: display)
+        }
+        return nil
     }
 
     private static func metric(_ any: Any?) -> UsageMetric? {

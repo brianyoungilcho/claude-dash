@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 APP="/Applications/Claude Dash.app"
 BIN_NAME="ClaudeDash"
 BUILD="$ROOT/.build"
-VERSION="1.1.0"
+VERSION="1.2.0"
 
 echo "==> Compiling (arm64 + x86_64)"
 rm -rf "$BUILD"
@@ -16,7 +16,7 @@ for arch in arm64 x86_64; do
     -target "${arch}-apple-macos13.0" \
     -o "$BUILD/$BIN_NAME-$arch" \
     "$ROOT"/Sources/*.swift \
-    -framework AppKit -framework SwiftUI -framework Security -framework ServiceManagement
+    -framework AppKit -framework SwiftUI -framework Security -framework ServiceManagement -framework WebKit -framework Carbon -framework UserNotifications
 done
 lipo -create -output "$BUILD/$BIN_NAME" "$BUILD/$BIN_NAME-arm64" "$BUILD/$BIN_NAME-x86_64"
 

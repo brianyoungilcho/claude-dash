@@ -48,11 +48,17 @@ if let u = UsageAPI.decodeUsage(fixture2) {
     check("decode2 returned a value", false)
 }
 
+let onCI = ProcessInfo.processInfo.environment["CI"] != nil
+
 print("== 3. Chrome profile discovery (real Local State) ==")
-let profiles = ChromeProfiles.all()
-check("found at least one Chrome profile", profiles.count > 0)
-print("        discovered \(profiles.count) profiles:")
-for p in profiles { print("          [\(p.dir)] \(p.label)") }
+if onCI {
+    print("  SKIP  (CI runner has no browser profiles)")
+} else {
+    let profiles = ChromeProfiles.all()
+    check("found at least one Chrome profile", profiles.count > 0)
+    print("        discovered \(profiles.count) profiles:")
+    for p in profiles { print("          [\(p.dir)] \(p.label)") }
+}
 
 print("== 4. Keychain round-trip ==")
 let testAccount = "test-\(UUID().uuidString)"
@@ -63,6 +69,11 @@ Keychain.delete(account: testAccount)
 check("delete removes it", Keychain.get(account: testAccount) == nil)
 
 print("== 5. LIVE claude.ai endpoint — invalid key must map to .unauthorized ==")
+if onCI {
+    print("  SKIP  (datacenter IPs may be WAF-blocked; run locally)")
+    print("\n== RESULT: \(failures == 0 ? "ALL PASS" : "\(failures) FAILURE(S)") ==")
+    exit(failures == 0 ? 0 : 1)
+}
 let sema = DispatchSemaphore(value: 0)
 Task {
     do {
