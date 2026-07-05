@@ -90,7 +90,9 @@ Task {
     }
     sema.signal()
 }
-_ = sema.wait(timeout: .now() + 20)
+if sema.wait(timeout: .now() + 20) == .timedOut {
+    check("live endpoint responded within 20s", false)
+}
 
 print("\n== RESULT: \(failures == 0 ? "ALL PASS" : "\(failures) FAILURE(S)") ==")
 exit(failures == 0 ? 0 : 1)

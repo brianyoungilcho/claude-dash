@@ -120,7 +120,8 @@ final class AppModel: ObservableObject {
         await withTaskGroup(of: Void.self) { group in
             for a in accounts { group.addTask { await self.refresh(a) } }
         }
-        lastRefresh = Date()
+        // lastRefresh advances inside each successful fetch — a total outage
+        // must not keep stamping the footer with fresh-looking times.
     }
 
     func refresh(_ account: Account) async {
@@ -139,6 +140,7 @@ final class AppModel: ObservableObject {
                   accounts.contains(where: { $0.id == accountId }) else { return }
             u.projectedCap = projectCap(accountId: accountId, usage: u)
             usage[accountId] = .ok(u)
+            lastRefresh = Date()
             maybeNotify(account, u)
         } catch {
             guard fetchEpoch[accountId, default: 0] == epoch,
@@ -159,16 +161,24 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Burn-rate projection from two consecutive samples: at the current pace,
-    /// when does session usage hit 100%? Only returned when that lands before
-    /// the reset (otherwise the reset saves you and there's nothing to warn about).
+    /// Burn-rate projection: at the current pace, when does session usage hit
+    /// 100%? Rate is measured against an ANCHOR sample that only slides forward
+    /// once it's ≥5 minutes old — so panel-open/manual refreshes seconds apart
+    /// can't produce absurd rates, and slow burns accumulate over a real window
+    /// instead of vanishing under a per-poll deadband. Only returns a date when
+    /// the projected cap lands before the reset (otherwise the reset saves you).
     private func projectCap(accountId: String, usage u: AccountUsage) -> Date? {
         guard let util = u.session?.utilization else { return nil }
-        defer { lastSample[accountId] = (util, u.fetchedAt) }
-        guard let prev = lastSample[accountId] else { return nil }
-        let dt = u.fetchedAt.timeIntervalSince(prev.at)
-        let dUtil = util - prev.util
-        guard dt > 0, dUtil > 0.1, util < 100 else { return nil }
+        guard let anchor = lastSample[accountId], util >= anchor.util else {
+            // First sample, or usage went DOWN (session reset) — re-anchor.
+            lastSample[accountId] = (util, u.fetchedAt)
+            return nil
+        }
+        let dt = u.fetchedAt.timeIntervalSince(anchor.at)
+        if dt >= 300 { lastSample[accountId] = (util, u.fetchedAt) }   // slide the window
+        let dUtil = util - anchor.util
+        // Need a real measurement window and real movement before projecting.
+        guard dt >= 180, dUtil > 0.5, util < 100 else { return nil }
         let projected = u.fetchedAt.addingTimeInterval((100 - util) / (dUtil / dt))
         guard let reset = u.session?.resetsAt, projected < reset else { return nil }
         return projected
@@ -188,10 +198,12 @@ final class AppModel: ObservableObject {
         }
         if pct < Double(max(threshold - 10, 10)) {
             notifiedThreshold.remove(account.id)   // re-arm after the window resets
-            if cappedAwaitingReset.remove(account.id) != nil, Prefs.notifyOnReset {
-                Notifier.post(title: "\(account.displayName) session reset",
-                              body: "Usage is back to \(Int(pct))% — good to go.")
-            }
+        }
+        // A real session reset lands near 0 — raising the threshold preference
+        // must not masquerade as one.
+        if pct < 15, cappedAwaitingReset.remove(account.id) != nil, Prefs.notifyOnReset {
+            Notifier.post(title: "\(account.displayName) session reset",
+                          body: "Usage is back to \(Int(pct))% — good to go.")
         }
     }
 

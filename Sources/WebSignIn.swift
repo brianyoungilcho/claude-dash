@@ -10,13 +10,17 @@ import WebKit
 final class SignInWindow: NSObject, WKNavigationDelegate, NSWindowDelegate {
     private static var active: SignInWindow?
 
-    private var window: NSWindow!
+    private var window: NSWindow?
     private var webView: WKWebView!
     private var pollTimer: Timer?
     private var onKey: ((String) -> Void)?
     private var captured = false
 
     static func present(onKey: @escaping (String) -> Void) {
+        // Single instance: a second Sign in… click supersedes the first login
+        // window — tear the old one down PROPERLY (timer invalidated, window
+        // closed) instead of silently dropping its last strong reference.
+        active?.close()
         let controller = SignInWindow()
         controller.onKey = onKey
         active = controller
@@ -34,16 +38,17 @@ final class SignInWindow: NSObject, WKNavigationDelegate, NSWindowDelegate {
         webView.navigationDelegate = self
         webView.load(URLRequest(url: URL(string: "https://claude.ai/login")!))
 
-        window = NSWindow(contentRect: webView.frame,
-                          styleMask: [.titled, .closable, .resizable],
-                          backing: .buffered, defer: false)
-        window.title = "Sign in to Claude"
-        window.contentView = webView
-        window.isReleasedWhenClosed = false
-        window.delegate = self
-        window.center()
+        let win = NSWindow(contentRect: webView.frame,
+                           styleMask: [.titled, .closable, .resizable],
+                           backing: .buffered, defer: false)
+        win.title = "Sign in to Claude"
+        win.contentView = webView
+        win.isReleasedWhenClosed = false
+        win.delegate = self
+        win.center()
+        window = win
         NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
+        win.makeKeyAndOrderFront(nil)
 
         // The sessionKey cookie appears once login completes; poll for it so
         // we catch flows that finish without a full navigation (SPA logins).
@@ -74,14 +79,14 @@ final class SignInWindow: NSObject, WKNavigationDelegate, NSWindowDelegate {
     private func close() {
         pollTimer?.invalidate()
         pollTimer = nil
-        window.delegate = nil
-        window.close()
-        SignInWindow.active = nil
+        window?.delegate = nil
+        window?.close()
+        if SignInWindow.active === self { SignInWindow.active = nil }
     }
 
     func windowWillClose(_ notification: Notification) {
         pollTimer?.invalidate()
         pollTimer = nil
-        SignInWindow.active = nil
+        if SignInWindow.active === self { SignInWindow.active = nil }
     }
 }

@@ -20,6 +20,10 @@ let repoURL = "https://github.com/brianyoungilcho/claude-dash"
 // MARK: - Floating dashboard panel
 
 final class DashboardPanel: NSPanel {
+    /// All dismissals must run through the owner's hidePanel() so the global
+    /// outside-click monitor is torn down on every path, including Esc.
+    var onDismiss: (() -> Void)?
+
     init(content: NSView) {
         super.init(contentRect: NSRect(x: 0, y: 0, width: 340, height: 400),
                    styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel],
@@ -37,7 +41,9 @@ final class DashboardPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 
     /// Esc dismisses the panel.
-    override func cancelOperation(_ sender: Any?) { orderOut(nil) }
+    override func cancelOperation(_ sender: Any?) {
+        if let onDismiss { onDismiss() } else { orderOut(nil) }
+    }
 }
 
 // MARK: - Carbon hotkey trampoline (C callback can't capture context)
@@ -83,6 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 MainActor.assumeIsolated {
                     self?.renderStatusImage()
                     self?.syncHotkey()
+                    self?.resizePanelIfNeeded()
                 }
             }
             .store(in: &cancellables)
@@ -107,6 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         hostingView = NSHostingView(rootView: root)
         panel = DashboardPanel(content: hostingView)
+        panel.onDismiss = { [weak self] in self?.hidePanel() }
     }
 
     private func togglePanel() {
@@ -133,6 +141,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func hidePanel() {
         panel.orderOut(nil)
         if let m = outsideClickMonitor { NSEvent.removeMonitor(m); outsideClickMonitor = nil }
+    }
+
+    /// Keep the visible panel sized to its content — rows appear, disappear,
+    /// and grow (pace warnings, new metrics) while it's open.
+    private func resizePanelIfNeeded() {
+        guard panel.isVisible else { return }
+        let size = hostingView.fittingSize
+        let target = NSSize(width: max(size.width, 340), height: min(max(size.height, 120), 600))
+        guard abs(panel.frame.height - target.height) > 2 || abs(panel.frame.width - target.width) > 2 else { return }
+        let top = panel.frame.maxY
+        panel.setContentSize(target)
+        panel.setFrameOrigin(NSPoint(x: panel.frame.origin.x, y: top - panel.frame.height))
     }
 
     private func positionPanel() {
@@ -321,20 +341,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// (Dock icon) while any aux window is open. The willClose observer is the
     /// single cleanup path, so the red close button, Cancel, and success all
     /// restore the accessory policy identically.
+    private final class WeakWindowBox { weak var window: NSWindow? }
+
     private func presentAuxWindow(title: String, _ make: (@escaping () -> Void) -> AnyView) {
-        var winRef: NSWindow?
-        let view = make { winRef?.close() }
+        // Single instance per dialog: focus the existing window instead of
+        // stacking duplicates with divergent state snapshots.
+        if let existing = auxWindows.first(where: { $0.title == title }) {
+            NSApp.activate(ignoringOtherApps: true)
+            existing.makeKeyAndOrderFront(nil)
+            return
+        }
+        // The onDone closure must hold the window WEAKLY, or the window's own
+        // view hierarchy retains it forever (window → hosting → view → closure).
+        let box = WeakWindowBox()
+        let view = make { box.window?.close() }
         let win = NSWindow(contentViewController: NSHostingController(rootView: view))
-        winRef = win
+        box.window = win
         win.title = title
         win.styleMask = [.titled, .closable]
         win.isReleasedWhenClosed = false
         win.center()
-        NotificationCenter.default.addObserver(
+        var token: NSObjectProtocol?
+        token = NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification, object: win, queue: .main
         ) { [weak self] note in
-            NotificationCenter.default.removeObserver(self as Any, name: NSWindow.willCloseNotification,
-                                                      object: note.object)
+            if let token { NotificationCenter.default.removeObserver(token) }
+            token = nil
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.auxWindows.removeAll { $0 === (note.object as? NSWindow) }
