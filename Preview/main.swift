@@ -113,6 +113,28 @@ MainActor.assumeIsolated {
     render(panel(.light), "\(out)/panel-light.png", scale: 3)
     render(panel(.dark), "\(out)/panel-dark.png", scale: 3)
 
+    // Board window at multiple widths — verifies the adaptive card grid and
+    // the text-scale environment (Large = 1.25).
+    func board(width: CGFloat, textScale: CGFloat) -> some View {
+        BoardContent(accounts: accounts, usage: usage,
+                     notes: {
+                         var n = NotesData()
+                         n.global = "Focus this week: launch + sitemap fix"
+                         n.accounts["a"] = AccountNote(text: sampleNotes["a"]!.0, flagged: false)
+                         n.accounts["b"] = AccountNote(text: sampleNotes["b"]!.0, flagged: true)
+                         return n
+                     }(),
+                     convos: sampleConvos, ccSessions: ccSessions, lastRefresh: now,
+                     embedInScrollView: false)
+            .environment(\.dashScale, textScale)
+            .frame(width: width)
+            .background(Color(white: 0.14))
+            .environment(\.colorScheme, .dark)
+    }
+    render(board(width: 480, textScale: 1.25), "\(out)/board-narrow.png", scale: 2)
+    render(board(width: 900, textScale: 1.25), "\(out)/board-wide.png", scale: 2)
+    render(board(width: 1300, textScale: 1.5), "\(out)/board-xl.png", scale: 2)
+
     // Add-account sheet.
     render(AddAccountView(model: AppModel(), onDone: {})
         .background(Color(white: 0.15))

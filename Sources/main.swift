@@ -40,11 +40,8 @@ final class DashboardPanel: NSPanel {
 
     override var canBecomeKey: Bool { true }
 
-    /// Pinned boards ignore Esc; popovers dismiss.
-    var pinned = false
-
+    /// Esc dismisses the popover.
     override func cancelOperation(_ sender: Any?) {
-        guard !pinned else { return }
         if let onDismiss { onDismiss() } else { orderOut(nil) }
     }
 }
@@ -68,6 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: DashboardPanel!
     private var hostingView: NSHostingView<DashboardView>!
     private var auxWindows: [NSWindow] = []
+    private var boardWindow: NSWindow?
     private var cancellables = Set<AnyCancellable>()
     private var outsideClickMonitor: Any?
     private var hotKeyRef: EventHotKeyRef?
@@ -80,22 +78,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSSetUncaughtExceptionHandler { ex in
             dlog("UNCAUGHT EXCEPTION: \(ex.name.rawValue) — \(ex.reason ?? "nil")\n\(ex.callStackSymbols.joined(separator: "\n"))")
         }
+        setupMainMenu()
         setupPanel()
         setupStatusItem()
         registerLoginItemOnce()
         syncHotkey()
         model.startPolling()
-
-        // Pin transitions must run SYNCHRONOUSLY (before SwiftUI relayouts the
-        // hosting view), or the popover constraints overwrite the remembered
-        // board frame while the autosave name is still active.
-        model.$boardPinned
-            .dropFirst()
-            .removeDuplicates()
-            .sink { [weak self] pinned in
-                MainActor.assumeIsolated { self?.applyPinState(pinned: pinned) }
-            }
-            .store(in: &cancellables)
+        if Prefs.boardWasOpen { openBoardWindow() }
 
         // Re-render the menu-bar gauges (and re-sync the hotkey) on any change.
         model.objectWillChange
@@ -105,9 +94,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     guard let self else { return }
                     self.renderStatusImage()
                     self.syncHotkey()
-                    if self.model.boardPinned {   // float preference may have changed
-                        self.panel.level = Prefs.boardFloats ? .floating : .normal
-                    }
+                    // Float preference may have changed in Preferences.
+                    self.boardWindow?.level = Prefs.boardFloats ? .floating : .normal
                     self.resizePanelIfNeeded()
                 }
             }
@@ -143,67 +131,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             model: model,
             onAdd: { [weak self] in self?.showAddAccount() },
             onEdit: { [weak self] acct in self?.showEdit(acct) },
-            onPrefs: { [weak self] in self?.showPreferences() }
+            onPrefs: { [weak self] in self?.showPreferences() },
+            onOpenBoard: { [weak self] in
+                self?.hidePanel()
+                self?.openBoardWindow()
+            }
         )
         hostingView = NSHostingView(rootView: root)
         panel = DashboardPanel(content: hostingView)
         panel.onDismiss = { [weak self] in self?.hidePanel() }
-        applyPinState(pinned: model.boardPinned, initial: true)
-    }
-
-    /// Popover mode: auto-sized, dismiss-on-outside-click, floats.
-    /// Board mode: resizable, persistent, remembers its frame, optional float.
-    /// Called synchronously on pin changes — the autosave name must be cleared
-    /// BEFORE SwiftUI shrinks the window to popover constraints.
-    private func applyPinState(pinned: Bool, initial: Bool = false) {
-        guard panel.pinned != pinned || initial else { return }
-        panel.pinned = pinned
-        if pinned {
-            panel.styleMask.insert(.resizable)
-            panel.level = Prefs.boardFloats ? .floating : .normal
-            panel.setFrameAutosaveName("ClaudeDashBoard")   // also restores a saved frame
-            if !initial {
-                if let m = outsideClickMonitor { NSEvent.removeMonitor(m); outsideClickMonitor = nil }
-                if !panel.isVisible { panel.makeKeyAndOrderFront(nil) }
-            }
-        } else {
-            panel.setFrameAutosaveName("")   // FIRST — before any relayout can overwrite the board frame
-            panel.styleMask.remove(.resizable)
-            panel.level = .floating
-            if !initial, panel.isVisible {
-                // Snap back to compact popover under the status item.
-                let size = hostingView.fittingSize
-                panel.setContentSize(NSSize(width: 340, height: min(max(size.height, 120), 560)))
-                positionPanel()
-                if outsideClickMonitor == nil { installOutsideClickMonitor() }
-            }
-        }
     }
 
     private func togglePanel() {
-        if panel.isVisible {
-            // A buried non-floating board should be RAISED, not hidden.
-            if model.boardPinned && !panel.isKeyWindow {
-                panel.makeKeyAndOrderFront(nil)
-            } else {
-                hidePanel()
-            }
-        } else {
-            showPanel()
-        }
+        panel.isVisible ? hidePanel() : showPanel()
     }
 
     private func showPanel() {
-        if model.boardPinned {
-            // Board: restore the remembered frame; user controls size/position.
-            panel.makeKeyAndOrderFront(nil)
-        } else {
-            let size = hostingView.fittingSize
-            panel.setContentSize(NSSize(width: max(size.width, 340), height: min(max(size.height, 120), 600)))
-            positionPanel()
-            panel.makeKeyAndOrderFront(nil)
-            if outsideClickMonitor == nil { installOutsideClickMonitor() }
-        }
+        let size = hostingView.fittingSize
+        panel.setContentSize(NSSize(width: max(size.width, 340), height: min(max(size.height, 120), 600)))
+        positionPanel()
+        panel.makeKeyAndOrderFront(nil)
+        if outsideClickMonitor == nil { installOutsideClickMonitor() }
         Task { await model.refreshAll() }
         model.refreshClaudeCode()
     }
@@ -223,10 +171,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let m = outsideClickMonitor { NSEvent.removeMonitor(m); outsideClickMonitor = nil }
     }
 
-    /// Keep the visible POPOVER sized to its content — rows appear, disappear,
-    /// and grow while it's open. Pinned boards are user-sized; never fight them.
+    /// Keep the visible popover sized to its content — rows appear, disappear,
+    /// and grow while it's open.
     private func resizePanelIfNeeded() {
-        guard panel.isVisible, !model.boardPinned else { return }
+        guard panel.isVisible else { return }
         let size = hostingView.fittingSize
         let target = NSSize(width: max(size.width, 340), height: min(max(size.height, 120), 600))
         guard abs(panel.frame.height - target.height) > 2 || abs(panel.frame.width - target.width) > 2 else { return }
@@ -244,6 +192,111 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         x = min(max(x, visible.minX + 8), visible.maxX - panel.frame.width - 8)
         let y = bframe.minY - panel.frame.height - 4
         panel.setFrameOrigin(NSPoint(x: x, y: y))
+    }
+
+    // MARK: Board window (a real, resizable macOS window)
+
+    @objc func openBoardWindow() {
+        if let win = boardWindow {
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+            win.makeKeyAndOrderFront(nil)
+            return
+        }
+        let view = BoardView(
+            model: model,
+            onAdd: { [weak self] in self?.showAddAccount() },
+            onEdit: { [weak self] acct in self?.showEdit(acct) },
+            onPrefs: { [weak self] in self?.showPreferences() }
+        )
+        let win = NSWindow(contentViewController: NSHostingController(rootView: view))
+        win.title = "Claude Dash"
+        win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        win.isReleasedWhenClosed = false
+        win.minSize = NSSize(width: 400, height: 320)
+        win.level = Prefs.boardFloats ? .floating : .normal
+        if !win.setFrameUsingName("ClaudeDashBoardWindow") {
+            win.setContentSize(NSSize(width: 820, height: 640))
+            win.center()
+        }
+        win.setFrameAutosaveName("ClaudeDashBoardWindow")
+        var token: NSObjectProtocol?
+        token = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: win, queue: .main
+        ) { [weak self] _ in
+            if let token { NotificationCenter.default.removeObserver(token) }
+            token = nil
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.boardWindow = nil
+                Prefs.boardWasOpen = false
+                self.model.flushNotesNow()
+                if self.auxWindows.isEmpty { NSApp.setActivationPolicy(.accessory) }
+            }
+        }
+        boardWindow = win
+        Prefs.boardWasOpen = true
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        win.makeKeyAndOrderFront(nil)
+        Task { await model.refreshAll() }
+        model.refreshClaudeCode()
+    }
+
+    private func toggleBoardWindow() {
+        if let win = boardWindow, win.isVisible {
+            if win.isKeyWindow {
+                win.performClose(nil)
+            } else {
+                NSApp.setActivationPolicy(.regular)
+                NSApp.activate(ignoringOtherApps: true)
+                win.makeKeyAndOrderFront(nil)
+            }
+        } else {
+            openBoardWindow()
+        }
+    }
+
+    // MARK: Main menu — an LSUIElement app has none by default, which silently
+    // breaks ⌘C/⌘V/⌘A in every text field and ⌘W on windows.
+
+    private func setupMainMenu() {
+        let main = NSMenu()
+
+        let appItem = NSMenuItem(); main.addItem(appItem)
+        let appMenu = NSMenu()
+        let about = NSMenuItem(title: "About Claude Dash", action: #selector(openAbout), keyEquivalent: "")
+        about.target = self
+        appMenu.addItem(about)
+        let prefs = NSMenuItem(title: "Preferences…", action: #selector(openPreferences), keyEquivalent: ",")
+        prefs.target = self
+        appMenu.addItem(prefs)
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Quit Claude Dash",
+                        action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = appMenu
+
+        let editItem = NSMenuItem(); main.addItem(editItem)
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = edit
+
+        let windowItem = NSMenuItem(); main.addItem(windowItem)
+        let window = NSMenu(title: "Window")
+        let board = NSMenuItem(title: "Claude Dash Board", action: #selector(openBoardWindow), keyEquivalent: "")
+        board.target = self
+        window.addItem(board)
+        window.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        window.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowItem.submenu = window
+
+        NSApp.mainMenu = main
     }
 
     // MARK: Status item
@@ -272,7 +325,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
         menu.addItem(withTitle: "Preferences…", action: #selector(openPreferences), keyEquivalent: ",")
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Open Dashboard", action: #selector(openDashboard), keyEquivalent: "")
+        menu.addItem(withTitle: "Open Board Window", action: #selector(openBoardWindow), keyEquivalent: "b")
+        menu.addItem(withTitle: "Open Quick Glance", action: #selector(openDashboard), keyEquivalent: "")
         menu.addItem(withTitle: "Refresh Now", action: #selector(refreshNow), keyEquivalent: "r")
         menu.addItem(withTitle: "Add Account…", action: #selector(addAccountMenu), keyEquivalent: "n")
         menu.addItem(.separator())
@@ -289,7 +343,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func addAccountMenu() { showAddAccount() }
     @objc private func openPreferences() { showPreferences() }
 
-    func hotkeyFired() { togglePanel() }
+    func hotkeyFired() { toggleBoardWindow() }
 
     // MARK: Update check (plain GitHub Releases — no Sparkle)
 

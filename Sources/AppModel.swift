@@ -10,9 +10,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var lastRefresh: Date?
     /// Bumped once a minute so reset countdowns stay live between polls.
     @Published private(set) var displayTick = 0
-    /// Board layer: notes, pin state, per-account conversations, Claude Code sessions.
+    /// Board layer: notes, per-account conversations, Claude Code sessions.
     @Published private(set) var notes: NotesData = NotesStore.load()
-    @Published var boardPinned: Bool = Prefs.boardPinned { didSet { Prefs.boardPinned = boardPinned } }
     @Published private(set) var convos: [String: [Convo]] = [:]
     @Published private(set) var ccSessions: [CCSession] = []
 

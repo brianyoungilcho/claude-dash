@@ -1,5 +1,15 @@
 import SwiftUI
 
+// MARK: - Density scale (popover = 1.0; board window = user preference)
+
+private struct DashScaleKey: EnvironmentKey { static let defaultValue: CGFloat = 1.0 }
+extension EnvironmentValues {
+    var dashScale: CGFloat {
+        get { self[DashScaleKey.self] }
+        set { self[DashScaleKey.self] = newValue }
+    }
+}
+
 // MARK: - Shared helpers
 
 func usageColor(_ pct: Double) -> Color {
@@ -22,17 +32,18 @@ func resetString(_ date: Date?) -> String {
 struct UsageBar: View {
     var pct: Double
     var height: CGFloat = 7
+    @Environment(\.dashScale) private var s
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: height / 2)
+                RoundedRectangle(cornerRadius: height * s / 2)
                     .fill(Color.primary.opacity(0.12))
-                RoundedRectangle(cornerRadius: height / 2)
+                RoundedRectangle(cornerRadius: height * s / 2)
                     .fill(usageColor(pct))
                     .frame(width: max(0, min(1, pct / 100)) * geo.size.width)
             }
         }
-        .frame(height: height)
+        .frame(height: height * s)
         .accessibilityElement()
         .accessibilityLabel("\(Int(pct)) percent used")
     }
@@ -43,21 +54,22 @@ struct MetricLine: View {
     var label: String
     var metric: UsageMetric
     var trailing: String? = nil   // defaults to the reset countdown
+    @Environment(\.dashScale) private var s
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 6 * s) {
             Text(label)
-                .font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
-                .frame(width: 44, alignment: .leading)
+                .font(.system(size: 9 * s, weight: .medium)).foregroundStyle(.secondary)
+                .frame(width: 44 * s, alignment: .leading)
                 .lineLimit(1)
             UsageBar(pct: metric.utilization, height: 4)
             Text(Prefs.pctLabel(metric.utilization))
-                .font(.system(size: 9, weight: .medium)).monospacedDigit()
+                .font(.system(size: 9 * s, weight: .medium)).monospacedDigit()
                 .foregroundStyle(usageColor(metric.utilization))
-                .frame(minWidth: 30, alignment: .trailing)
+                .frame(minWidth: 30 * s, alignment: .trailing)
             Text(trailing ?? resetString(metric.resetsAt))
-                .font(.system(size: 8)).foregroundStyle(.secondary)
-                .frame(width: 76, alignment: .trailing)
+                .font(.system(size: 8 * s)).foregroundStyle(.secondary)
+                .frame(width: 76 * s, alignment: .trailing)
                 .lineLimit(1)
         }
         .accessibilityElement(children: .combine)
@@ -73,6 +85,7 @@ struct NoteView: View {
     var onChange: (String) -> Void
     var onCommit: () -> Void = {}   // fired when an edit session ends → flush to disk
 
+    @Environment(\.dashScale) private var s
     @State private var editing = false
     @FocusState private var focused: Bool
 
@@ -80,19 +93,19 @@ struct NoteView: View {
         Group {
             if editing {
                 TextEditor(text: Binding(get: { text }, set: onChange))
-                    .font(.system(size: 11))
+                    .font(.system(size: 11 * s))
                     .scrollContentBackground(.hidden)
-                    .frame(minHeight: 44, maxHeight: 140)
+                    .frame(minHeight: 44 * s, maxHeight: 140 * s)
                     .focused($focused)
                     .onChange(of: focused) { if !$0 { editing = false; onCommit() } }
             } else if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(placeholder)
-                    .font(.system(size: 11)).foregroundStyle(.tertiary)
+                    .font(.system(size: 11 * s)).foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                     .onTapGesture { editing = true; focused = true }
             } else {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 2 * s) {
                     ForEach(Array(NoteParser.lines(text).enumerated()), id: \.offset) { idx, line in
                         switch line {
                         case .checkbox(let done, let body):
@@ -101,17 +114,17 @@ struct NoteView: View {
                                     onChange(NoteParser.toggle(text, line: idx))
                                 } label: {
                                     Image(systemName: done ? "checkmark.square.fill" : "square")
-                                        .font(.system(size: 11))
+                                        .font(.system(size: 11 * s))
                                         .foregroundStyle(done ? Color.accentColor : .secondary)
                                 }
                                 .buttonStyle(.plain)
                                 Text(body)
-                                    .font(.system(size: 11))
+                                    .font(.system(size: 11 * s))
                                     .strikethrough(done)
                                     .foregroundStyle(done ? .secondary : .primary)
                             }
                         case .plain(let body):
-                            Text(body.isEmpty ? " " : body).font(.system(size: 11))
+                            Text(body.isEmpty ? " " : body).font(.system(size: 11 * s))
                         }
                     }
                 }
@@ -120,7 +133,7 @@ struct NoteView: View {
                 .onTapGesture { editing = true; focused = true }
             }
         }
-        .padding(6)
+        .padding(6 * s)
         .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.05)))
         .help("Click to edit. Lines like “- [ ] task” become checkboxes.")
     }
@@ -131,18 +144,19 @@ struct NoteView: View {
 struct ConvoList: View {
     var convos: [Convo]
     var open: (Convo) -> Void
+    @Environment(\.dashScale) private var s
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 2 * s) {
             ForEach(convos.prefix(3)) { c in
                 Button { open(c) } label: {
                     HStack(spacing: 5) {
-                        Image(systemName: "bubble.left").font(.system(size: 8))
+                        Image(systemName: "bubble.left").font(.system(size: 8 * s))
                             .foregroundStyle(.secondary)
-                        Text(c.name).font(.system(size: 10)).lineLimit(1)
+                        Text(c.name).font(.system(size: 10 * s)).lineLimit(1)
                         Spacer(minLength: 4)
                         if let d = c.updatedAt {
-                            Text(relative(d)).font(.system(size: 9)).foregroundStyle(.secondary)
+                            Text(relative(d)).font(.system(size: 9 * s)).foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -168,6 +182,7 @@ struct DashboardView: View {
     var onAdd: () -> Void
     var onEdit: (Account) -> Void
     var onPrefs: () -> Void
+    var onOpenBoard: () -> Void = {}
 
     var body: some View {
         VStack(spacing: 0) {
@@ -207,24 +222,17 @@ struct DashboardView: View {
             }
             footer
         }
-        .frame(minWidth: 340,
-               maxWidth: model.boardPinned ? .infinity : 340,
-               minHeight: model.boardPinned ? 260 : nil,
-               maxHeight: model.boardPinned ? .infinity : 560)
+        .frame(width: 340)
+        .frame(maxHeight: 560)
     }
 
     private var header: some View {
         HStack {
             Text("Claude Dash").font(.system(size: 13, weight: .semibold))
             Spacer()
-            Button(action: { model.boardPinned.toggle() }) {
-                Image(systemName: model.boardPinned ? "pin.fill" : "pin")
-                    .foregroundStyle(model.boardPinned ? Color.accentColor : Color.secondary)
-            }
-            .buttonStyle(.borderless)
-            .help(model.boardPinned
-                  ? "Unpin — back to a quick-glance popover"
-                  : "Pin as a board — stays open, resizable")
+            Button(action: onOpenBoard) { Image(systemName: "macwindow") }
+                .buttonStyle(.borderless)
+                .help("Open as a window — bigger text, resizable, notes side by side (⌃⌥⌘D)")
             Button(action: onPrefs) { Image(systemName: "gearshape") }
                 .buttonStyle(.borderless)
                 .help("Preferences")
@@ -290,16 +298,17 @@ struct AccountRow: View {
     var toggleFlag: () -> Void = {}
     var noteChanged: (String) -> Void = { _ in }
     var noteCommitted: () -> Void = {}
+    @Environment(\.dashScale) private var s
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 6) {
+        HStack(alignment: .top, spacing: 8 * s) {
+            VStack(alignment: .leading, spacing: 5 * s) {
+                HStack(spacing: 6 * s) {
                     if flagged {
                         Image(systemName: "flag.fill")
-                            .font(.system(size: 9)).foregroundStyle(.orange)
+                            .font(.system(size: 9 * s)).foregroundStyle(.orange)
                     }
-                    Text(account.displayName).font(.system(size: 12, weight: .semibold))
+                    Text(account.displayName).font(.system(size: 12 * s, weight: .semibold))
                     Spacer()
                     statusBadge
                 }
@@ -312,11 +321,11 @@ struct AccountRow: View {
                          onChange: noteChanged,
                          onCommit: noteCommitted)
                 Text(account.chromeProfileLabel)
-                    .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.system(size: 10 * s)).foregroundStyle(.secondary).lineLimit(1)
             }
-            VStack(alignment: .trailing, spacing: 5) {
+            VStack(alignment: .trailing, spacing: 5 * s) {
                 Button(action: open) {
-                    Text("Open").font(.system(size: 11, weight: .medium))
+                    Text("Open").font(.system(size: 11 * s, weight: .medium))
                 }
                 .controlSize(.small)
                 .help("Open claude.ai in \(account.chromeProfileLabel)")
@@ -331,11 +340,11 @@ struct AccountRow: View {
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
-                .frame(width: 24)
+                .frame(width: 24 * s)
                 .help("More actions")
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 9)
+        .padding(.horizontal, 12 * s).padding(.vertical, 9 * s)
         .background(flagged ? Color.orange.opacity(0.06) : Color.clear)
         .overlay(alignment: .leading) {
             if flagged { Rectangle().fill(Color.orange).frame(width: 2) }
@@ -356,22 +365,22 @@ struct AccountRow: View {
         switch state {
         case .ok(let u):
             let session = u.session?.utilization ?? 0
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 4 * s) {
                 // Session — the primary metric, full-size bar.
                 HStack {
-                    Text("Session").font(.system(size: 10)).foregroundStyle(.secondary)
+                    Text("Session").font(.system(size: 10 * s)).foregroundStyle(.secondary)
                     Spacer()
                     Text(resetString(u.session?.resetsAt))
-                        .font(.system(size: 9)).foregroundStyle(.secondary)
+                        .font(.system(size: 9 * s)).foregroundStyle(.secondary)
                     Text(Prefs.pctLabel(session))
-                        .font(.system(size: 10, weight: .semibold)).monospacedDigit()
+                        .font(.system(size: 10 * s, weight: .semibold)).monospacedDigit()
                         .foregroundStyle(usageColor(session))
                 }
                 UsageBar(pct: session)
                 if let cap = u.projectedCap {
                     Label("At this pace, caps \(cap.formatted(date: .omitted, time: .shortened))",
                           systemImage: "speedometer")
-                        .font(.system(size: 9)).foregroundStyle(.orange)
+                        .font(.system(size: 9 * s)).foregroundStyle(.orange)
                 }
                 // Weekly + per-model caps (e.g. Fable) — compact aligned lines.
                 if let weekly = u.weekly {
@@ -389,17 +398,17 @@ struct AccountRow: View {
         case .loading, .unknown:
             HStack(spacing: 6) {
                 ProgressView().controlSize(.small)
-                Text("Loading…").font(.system(size: 11)).foregroundStyle(.secondary)
-            }.frame(height: 20)
+                Text("Loading…").font(.system(size: 11 * s)).foregroundStyle(.secondary)
+            }.frame(height: 20 * s)
         case .unauthorized:
             Button(action: edit) {
                 Label("Session key expired — replace", systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11))
+                    .font(.system(size: 11 * s))
             }.buttonStyle(.borderless).foregroundStyle(.red)
         case .rateLimited:
-            Text("Rate limited — retrying soon").font(.system(size: 11)).foregroundStyle(.orange)
+            Text("Rate limited — retrying soon").font(.system(size: 11 * s)).foregroundStyle(.orange)
         case .error(let m):
-            Text(m).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(2)
+            Text(m).font(.system(size: 10 * s)).foregroundStyle(.secondary).lineLimit(2)
         }
     }
 
@@ -407,9 +416,9 @@ struct AccountRow: View {
         switch state {
         case .ok(let u):
             let five = u.session?.utilization ?? 0
-            Circle().fill(usageColor(five)).frame(width: 7, height: 7)
+            Circle().fill(usageColor(five)).frame(width: 7 * s, height: 7 * s)
         case .unauthorized:
-            Circle().fill(Color.red).frame(width: 7, height: 7)
+            Circle().fill(Color.red).frame(width: 7 * s, height: 7 * s)
         default:
             EmptyView()
         }
@@ -421,26 +430,27 @@ struct AccountRow: View {
 
 struct ClaudeCodeSection: View {
     var sessions: [CCSession]
+    @Environment(\.dashScale) private var scale
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 5 * scale) {
             Text("CLAUDE CODE")
-                .font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+                .font(.system(size: 9 * scale, weight: .semibold)).foregroundStyle(.secondary)
             ForEach(sessions) { s in
-                HStack(spacing: 6) {
+                HStack(spacing: 6 * scale) {
                     Circle()
                         .fill(s.waiting ? Color.orange : activityColor(s))
-                        .frame(width: 7, height: 7)
-                    Text(s.projectDisplay).font(.system(size: 11, weight: .medium))
+                        .frame(width: 7 * scale, height: 7 * scale)
+                    Text(s.projectDisplay).font(.system(size: 11 * scale, weight: .medium))
                     Spacer()
                     Text(s.waiting ? "waiting for your input" : relative(s.lastActivity))
-                        .font(.system(size: 10))
+                        .font(.system(size: 10 * scale))
                         .foregroundStyle(s.waiting ? .orange : .secondary)
                 }
                 .accessibilityLabel("Claude Code in \(s.projectDisplay): \(s.waiting ? "waiting for your input" : "active \(relative(s.lastActivity))")")
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 9)
+        .padding(.horizontal, 12 * scale).padding(.vertical, 9 * scale)
     }
 
     private func activityColor(_ s: CCSession) -> Color {
@@ -794,6 +804,7 @@ struct PreferencesView: View {
     @State private var showConversations = Prefs.showConversations
     @State private var ccMonitor = Prefs.ccMonitor
     @State private var boardFloats = Prefs.boardFloats
+    @State private var boardTextScale = Prefs.boardTextScale
     @State private var hooksInstalled = ClaudeCodeMonitor.hooksInstalled()
     @State private var hooksError: String?
 
@@ -817,7 +828,12 @@ struct PreferencesView: View {
             Section {
                 Toggle("Show recent conversations per account", isOn: $showConversations)
                 Toggle("Show Claude Code activity", isOn: $ccMonitor)
-                Toggle("Pinned board floats above other windows", isOn: $boardFloats)
+                Toggle("Board window stays on top", isOn: $boardFloats)
+                Picker("Board text size", selection: $boardTextScale) {
+                    Text("Standard").tag(1.0)
+                    Text("Large").tag(1.25)
+                    Text("X-Large").tag(1.5)
+                }
                 HStack {
                     Text(hooksInstalled
                          ? "Claude Code hooks installed — sessions report “waiting for input”"
@@ -852,7 +868,7 @@ struct PreferencesView: View {
             }
             Section {
                 Toggle("Launch at login", isOn: $launchAtLogin)
-                Toggle("Global hotkey ⌃⌥⌘D toggles the dashboard", isOn: $hotkeyEnabled)
+                Toggle("Global hotkey ⌃⌥⌘D toggles the board window", isOn: $hotkeyEnabled)
             }
             Section {
                 Button("Check for Updates…", action: onCheckUpdates)
@@ -873,5 +889,6 @@ struct PreferencesView: View {
         .onChange(of: showConversations) { v in Prefs.showConversations = v; model.objectWillChange.send() }
         .onChange(of: ccMonitor) { v in Prefs.ccMonitor = v; model.refreshClaudeCode() }
         .onChange(of: boardFloats) { v in Prefs.boardFloats = v; model.objectWillChange.send() }
+        .onChange(of: boardTextScale) { v in Prefs.boardTextScale = v; model.objectWillChange.send() }
     }
 }

@@ -7,7 +7,7 @@
 One menu-bar app for juggling multiple Claude accounts: every account's usage
 at a glance, one click to open claude.ai in the right browser profile.
 
-![Dashboard](docs/panel-dark.png)
+![Board window](docs/board-wide.png)
 
 - **Menu-bar gauges** — a mini usage bar per account, always visible
   (or tightest-account-only / icon-only, your pick).
@@ -17,10 +17,13 @@ at a glance, one click to open claude.ai in the right browser profile.
   time. **Open** launches claude.ai in that account's browser profile.
 - **Burn-rate warning** — "at this pace, caps 12:09 PM" when your current
   session pace would hit the limit before the reset.
-- **Pin it into a board** — the pin button turns the popover into a
-  persistent, resizable window you keep open all day: per-account **notes**
-  (`- [ ] task` lines become checkboxes), a global scratchpad, and a manual
-  **attention flag** per account that also lights a dot in the menu bar.
+- **Board window** — a real, standalone macOS window (⌃⌥⌘D, or the window
+  button in the popover): accounts as side-by-side cards, **larger text**
+  (Standard/Large/X-Large in Preferences), per-account **notes** (`- [ ] task`
+  lines become checkboxes), a global scratchpad, and a manual **attention
+  flag** per account that also lights a dot in the menu bar. Resizable,
+  remembers its frame, optional always-on-top, reopens at launch if you had
+  it open.
 - **Signals** — each account shows its **recent claude.ai conversations**
   (click to open one in the right profile), and a **Claude Code** section
   shows local sessions — including *"waiting for your input"* if you opt in
@@ -106,6 +109,10 @@ language I normally write in.
 
 Session keys rotate periodically. When one dies, the row turns red — **⋯ →
 Edit… → Sign in…** gets a fresh one in seconds.
+
+The menu-bar popover stays as the compact quick glance:
+
+<img src="docs/panel-dark.png" width="360" alt="Menu-bar popover">
 
 ## Preferences
 

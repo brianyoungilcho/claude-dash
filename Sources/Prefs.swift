@@ -76,16 +76,30 @@ enum Prefs {
 
     // MARK: Board & signals
 
-    /// Board pinned open (persisted so it reopens the way you left it).
-    static var boardPinned: Bool {
-        get { d.bool(forKey: "boardPinned") }
-        set { d.set(newValue, forKey: "boardPinned") }
+    /// Board window was open at last quit → reopen at launch.
+    /// (Migrates the retired v1.3 "pinned panel" state on first read.)
+    static var boardWasOpen: Bool {
+        get {
+            if d.object(forKey: "boardPinned") != nil {   // one-time v1.3 migration
+                let pinned = d.bool(forKey: "boardPinned")
+                d.removeObject(forKey: "boardPinned")
+                d.set(pinned, forKey: "boardWasOpen")
+            }
+            return d.bool(forKey: "boardWasOpen")
+        }
+        set { d.set(newValue, forKey: "boardWasOpen") }
     }
 
-    /// Pinned board floats above other windows.
+    /// Board window floats above other windows.
     static var boardFloats: Bool {
         get { d.object(forKey: "boardFloats") == nil ? true : d.bool(forKey: "boardFloats") }
         set { d.set(newValue, forKey: "boardFloats") }
+    }
+
+    /// Text/layout scale for the board window (popover is always 1.0).
+    static var boardTextScale: Double {
+        get { let v = d.double(forKey: "boardTextScale"); return v >= 1.0 ? v : 1.25 }
+        set { d.set(newValue, forKey: "boardTextScale") }
     }
 
     /// Show recent claude.ai conversations under each account.
