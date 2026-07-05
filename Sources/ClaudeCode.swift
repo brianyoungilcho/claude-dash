@@ -77,7 +77,7 @@ enum ClaudeCodeMonitor {
         return sessions.map { s in
             var s = s
             // Match events to sessions by comparing encoded cwd to project dir.
-            if let hit = latest.first(where: { encodeProjectPath($0.key) == s.projectDir })?.value {
+            if let hit = latest.first(where: { matches(cwd: $0.key, projectDir: s.projectDir) })?.value {
                 s.waiting = hit.event == "Notification"
                     && hit.ts > s.lastActivity.addingTimeInterval(-2)   // not superseded by resumed work
                     && hit.ts.timeIntervalSinceNow > -3600
@@ -87,21 +87,47 @@ enum ClaudeCodeMonitor {
         }
     }
 
-    /// Mirror of Claude Code's path→dirname encoding ("/" and "." become "-").
+    /// Mirror of Claude Code's real path→dirname encoding: every character
+    /// outside [a-zA-Z0-9] becomes "-" (verified against the CC 2.1.x binary:
+    /// `e.replace(/[^a-zA-Z0-9]/g,"-")`, truncated at 200 chars + hash suffix).
     static func encodeProjectPath(_ path: String) -> String {
-        path.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ".", with: "-")
+        String(path.map { c in (c.isASCII && (c.isLetter || c.isNumber)) ? c : "-" })
+    }
+
+    /// CC truncates encoded paths at 200 chars and appends "-<hash>"; we can't
+    /// reproduce the hash, but the 200-char prefix still identifies the dir.
+    static func matches(cwd: String, projectDir: String) -> Bool {
+        let encoded = encodeProjectPath(cwd)
+        if encoded.count <= 200 { return encoded == projectDir }
+        return projectDir.hasPrefix(String(encoded.prefix(200)))
     }
 
     // MARK: Hook install / uninstall (opt-in; merges, never clobbers)
 
-    static var hooksInstalled: Bool {
-        guard let data = try? Data(contentsOf: claudeDir.appendingPathComponent("settings.json")),
-              let text = String(data: data, encoding: .utf8) else { return false }
-        return text.contains(hookMarker)
+    /// Parsed check — raw-text contains() would be defeated by
+    /// JSONSerialization's "\/" slash escaping in the file WE write.
+    static func hooksInstalled(settingsURL: URL? = nil) -> Bool {
+        let url = settingsURL ?? claudeDir.appendingPathComponent("settings.json")
+        guard let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let hooks = obj["hooks"] as? [String: Any] else { return false }
+        return hooks.values.contains { value in
+            ((value as? [[String: Any]]) ?? []).contains(where: entryHasMarker)
+        }
+    }
+
+    private static func entryHasMarker(_ entry: [String: Any]) -> Bool {
+        ((entry["hooks"] as? [[String: Any]]) ?? []).contains { cmd in
+            (cmd["command"] as? String)?.contains(hookMarker) == true
+        }
     }
 
     @discardableResult
     static func installHooks(settingsURL: URL? = nil) throws -> URL {
+        // Claude Code writes the hook payload as JSON + a trailing newline;
+        // capture via $(…) (which strips trailing newlines) so the composed
+        // record stays on ONE line, and emit it with a single printf so
+        // concurrent hooks can't interleave partial writes.
         let script = """
         #!/bin/bash
         # Claude Dash event hook — appends one JSON line per Claude Code event.
@@ -112,7 +138,9 @@ enum ClaudeCodeMonitor {
         if [ -f "$FILE" ] && [ "$(wc -c < "$FILE")" -gt 1000000 ]; then
           tail -n 500 "$FILE" > "$FILE.tmp" && mv "$FILE.tmp" "$FILE"
         fi
-        { printf '{"event":"%s","ts":%s,"payload":' "$1" "$(date +%s)"; cat -; printf '}\\n'; } >> "$FILE"
+        payload=$(cat -)
+        [ -z "$payload" ] && payload='{}'
+        printf '{"event":"%s","ts":%s,"payload":%s}\\n' "$1" "$(date +%s)" "$payload" >> "$FILE"
         exit 0
         """
         try script.data(using: .utf8)!.write(to: hookScript, options: .atomic)
@@ -120,16 +148,22 @@ enum ClaudeCodeMonitor {
 
         let url = settingsURL ?? claudeDir.appendingPathComponent("settings.json")
         var settings: [String: Any] = [:]
-        if let data = try? Data(contentsOf: url),
-           let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+        if let data = try? Data(contentsOf: url) {
+            // The file exists: refusing to parse it must ABORT, not proceed
+            // with empty settings — that would wipe the user's live config.
+            guard let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw NSError(domain: "ClaudeDash", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "~/.claude/settings.json exists but isn't valid JSON. Nothing was changed — fix the file first."])
+            }
             settings = existing
-        }
-        // Backup before touching a file we don't own.
-        if FileManager.default.fileExists(atPath: url.path) {
+            // Keep the FIRST (pristine) backup; never overwrite it with a
+            // hooked version on a second Install click.
             let backup = url.deletingLastPathComponent()
                 .appendingPathComponent("settings.json.claude-dash-backup")
-            try? FileManager.default.removeItem(at: backup)
-            try? FileManager.default.copyItem(at: url, to: backup)
+            if !FileManager.default.fileExists(atPath: backup.path) {
+                try? FileManager.default.copyItem(at: url, to: backup)
+            }
         }
 
         var hooks = settings["hooks"] as? [String: Any] ?? [:]

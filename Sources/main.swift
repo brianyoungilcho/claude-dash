@@ -72,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var outsideClickMonitor: Any?
     private var hotKeyRef: EventHotKeyRef?
     private var hotKeyHandlerInstalled = false
+    private var sigtermSource: DispatchSourceSignal?
 
     func applicationDidFinishLaunching(_ note: Notification) {
         // Safety net: a thrown exception during launch would otherwise be swallowed
@@ -85,18 +86,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         syncHotkey()
         model.startPolling()
 
+        // Pin transitions must run SYNCHRONOUSLY (before SwiftUI relayouts the
+        // hosting view), or the popover constraints overwrite the remembered
+        // board frame while the autosave name is still active.
+        model.$boardPinned
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] pinned in
+                MainActor.assumeIsolated { self?.applyPinState(pinned: pinned) }
+            }
+            .store(in: &cancellables)
+
         // Re-render the menu-bar gauges (and re-sync the hotkey) on any change.
         model.objectWillChange
             .debounce(for: .milliseconds(120), scheduler: RunLoop.main)
             .sink { [weak self] in
                 MainActor.assumeIsolated {
-                    self?.renderStatusImage()
-                    self?.syncHotkey()
-                    self?.applyPinState()
-                    self?.resizePanelIfNeeded()
+                    guard let self else { return }
+                    self.renderStatusImage()
+                    self.syncHotkey()
+                    if self.model.boardPinned {   // float preference may have changed
+                        self.panel.level = Prefs.boardFloats ? .floating : .normal
+                    }
+                    self.resizePanelIfNeeded()
                 }
             }
             .store(in: &cancellables)
+
+        // Notes must survive every exit path: normal quit (willTerminate) and
+        // SIGTERM (pkill during ./install.sh upgrades).
+        signal(SIGTERM, SIG_IGN)
+        sigtermSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        sigtermSource?.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.model.flushNotesNow() }
+            NSApp.terminate(nil)
+        }
+        sigtermSource?.resume()
 
         // Re-render immediately when the user flips light/dark mode.
         DistributedNotificationCenter.default.addObserver(
@@ -105,6 +130,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in MainActor.assumeIsolated { self?.renderStatusImage() } }
 
         renderStatusImage()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        model.flushNotesNow()
     }
 
     // MARK: Panel
@@ -119,31 +148,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hostingView = NSHostingView(rootView: root)
         panel = DashboardPanel(content: hostingView)
         panel.onDismiss = { [weak self] in self?.hidePanel() }
-        applyPinState(initial: true)
+        applyPinState(pinned: model.boardPinned, initial: true)
     }
 
     /// Popover mode: auto-sized, dismiss-on-outside-click, floats.
     /// Board mode: resizable, persistent, remembers its frame, optional float.
-    private func applyPinState(initial: Bool = false) {
-        let pinned = model.boardPinned
-        guard panel.pinned != pinned || initial else {
-            // Pin unchanged — but the float preference may have flipped.
-            if pinned { panel.level = Prefs.boardFloats ? .floating : .normal }
-            return
-        }
+    /// Called synchronously on pin changes — the autosave name must be cleared
+    /// BEFORE SwiftUI shrinks the window to popover constraints.
+    private func applyPinState(pinned: Bool, initial: Bool = false) {
+        guard panel.pinned != pinned || initial else { return }
         panel.pinned = pinned
         if pinned {
             panel.styleMask.insert(.resizable)
             panel.level = Prefs.boardFloats ? .floating : .normal
-            panel.setFrameAutosaveName("ClaudeDashBoard")
+            panel.setFrameAutosaveName("ClaudeDashBoard")   // also restores a saved frame
             if !initial {
                 if let m = outsideClickMonitor { NSEvent.removeMonitor(m); outsideClickMonitor = nil }
                 if !panel.isVisible { panel.makeKeyAndOrderFront(nil) }
             }
         } else {
+            panel.setFrameAutosaveName("")   // FIRST — before any relayout can overwrite the board frame
             panel.styleMask.remove(.resizable)
             panel.level = .floating
-            panel.setFrameAutosaveName("")   // popover position is computed, not remembered
             if !initial, panel.isVisible {
                 // Snap back to compact popover under the status item.
                 let size = hostingView.fittingSize
@@ -155,7 +181,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func togglePanel() {
-        panel.isVisible ? hidePanel() : showPanel()
+        if panel.isVisible {
+            // A buried non-floating board should be RAISED, not hidden.
+            if model.boardPinned && !panel.isKeyWindow {
+                panel.makeKeyAndOrderFront(nil)
+            } else {
+                hidePanel()
+            }
+        } else {
+            showPanel()
+        }
     }
 
     private func showPanel() {

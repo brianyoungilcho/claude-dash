@@ -71,6 +71,7 @@ struct NoteView: View {
     var text: String
     var placeholder: String
     var onChange: (String) -> Void
+    var onCommit: () -> Void = {}   // fired when an edit session ends → flush to disk
 
     @State private var editing = false
     @FocusState private var focused: Bool
@@ -83,7 +84,7 @@ struct NoteView: View {
                     .scrollContentBackground(.hidden)
                     .frame(minHeight: 44, maxHeight: 140)
                     .focused($focused)
-                    .onChange(of: focused) { if !$0 { editing = false } }
+                    .onChange(of: focused) { if !$0 { editing = false; onCommit() } }
             } else if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(placeholder)
                     .font(.system(size: 11)).foregroundStyle(.tertiary)
@@ -192,7 +193,8 @@ struct DashboardView: View {
                                 edit: { onEdit(account) },
                                 remove: { model.removeAccount(account) },
                                 toggleFlag: { model.toggleFlag(accountId: account.id) },
-                                noteChanged: { model.setNote(accountId: account.id, text: $0) }
+                                noteChanged: { model.setNote(accountId: account.id, text: $0) },
+                                noteCommitted: { model.flushNotesNow() }
                             )
                             Divider()
                         }
@@ -238,7 +240,8 @@ struct DashboardView: View {
     private var globalNote: some View {
         NoteView(text: model.notes.global,
                  placeholder: "Scratchpad — what's going on across everything…",
-                 onChange: { model.setGlobalNote($0) })
+                 onChange: { model.setGlobalNote($0) },
+                 onCommit: { model.flushNotesNow() })
             .padding(.horizontal, 12).padding(.vertical, 8)
     }
 
@@ -286,6 +289,7 @@ struct AccountRow: View {
     var remove: () -> Void
     var toggleFlag: () -> Void = {}
     var noteChanged: (String) -> Void = { _ in }
+    var noteCommitted: () -> Void = {}
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -305,7 +309,8 @@ struct AccountRow: View {
                 }
                 NoteView(text: noteText,
                          placeholder: "What am I working on here…",
-                         onChange: noteChanged)
+                         onChange: noteChanged,
+                         onCommit: noteCommitted)
                 Text(account.chromeProfileLabel)
                     .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
             }
@@ -789,7 +794,7 @@ struct PreferencesView: View {
     @State private var showConversations = Prefs.showConversations
     @State private var ccMonitor = Prefs.ccMonitor
     @State private var boardFloats = Prefs.boardFloats
-    @State private var hooksInstalled = ClaudeCodeMonitor.hooksInstalled
+    @State private var hooksInstalled = ClaudeCodeMonitor.hooksInstalled()
     @State private var hooksError: String?
 
     var body: some View {
@@ -824,7 +829,7 @@ struct PreferencesView: View {
                         do {
                             if hooksInstalled { try ClaudeCodeMonitor.uninstallHooks() }
                             else { try ClaudeCodeMonitor.installHooks() }
-                            hooksInstalled = ClaudeCodeMonitor.hooksInstalled
+                            hooksInstalled = ClaudeCodeMonitor.hooksInstalled()
                             hooksError = nil
                         } catch {
                             hooksError = error.localizedDescription

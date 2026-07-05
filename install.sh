@@ -17,6 +17,9 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 "$ROOT/build.sh"
 
 # Restart if an older instance is running, so the new build actually takes over.
+# Graceful quit first (lets the app flush notes); force only as fallback.
+osascript -e 'quit app "Claude Dash"' 2>/dev/null || true
+sleep 1
 pkill -f "Claude Dash.app/Contents/MacOS/ClaudeDash" 2>/dev/null && sleep 1 || true
 open "/Applications/Claude Dash.app"
 echo

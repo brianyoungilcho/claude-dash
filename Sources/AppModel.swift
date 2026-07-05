@@ -91,6 +91,13 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Synchronous save — called on edit-end, app termination, and SIGTERM so
+    /// the debounce window can never eat typed notes.
+    func flushNotesNow() {
+        notesSaveTask?.cancel()
+        NotesStore.save(notes)
+    }
+
     private func sessionPct(_ a: Account) -> Double? {
         if case .ok(let u) = usage[a.id] { return u.session?.utilization }
         return nil
@@ -222,9 +229,9 @@ final class AppModel: ObservableObject {
         guard Prefs.showConversations else { return }
         let last = convoFetchedAt[account.id] ?? .distantPast
         guard Date().timeIntervalSince(last) > 300 else { return }
-        convoFetchedAt[account.id] = Date()
         if let list = try? await UsageAPI.conversations(sessionKey: key, orgUuid: account.orgUuid),
            accounts.contains(where: { $0.id == account.id }) {
+            convoFetchedAt[account.id] = Date()   // stamp on SUCCESS — failures retry next poll
             convos[account.id] = list
         }
     }

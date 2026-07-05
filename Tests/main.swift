@@ -134,7 +134,79 @@ if let data = try? Data(contentsOf: tmpSettings),
 } else { check("hooks merge readback", false) }
 try? FileManager.default.removeItem(at: tmpSettings)
 
-print("== 9. LIVE claude.ai endpoint — invalid key must map to .unauthorized ==")
+print("== 9. Review-fix regressions ==")
+// 9a. Toggle must only flip the LEADING marker, never one inside task text.
+let tricky = "- [x] rename - [ ] placeholders in docs"
+let untoggled = NoteParser.toggle(tricky, line: 0)
+check("leading marker flipped, literal text preserved",
+      untoggled == "- [ ] rename - [ ] placeholders in docs")
+// 9b. Corrupt notes file → quarantined, not silently adopted-and-overwritten.
+let tmpNotes = FileManager.default.temporaryDirectory
+    .appendingPathComponent("cdash-notes-\(UUID().uuidString).json")
+try! "{{{not json".data(using: .utf8)!.write(to: tmpNotes)
+let loaded = NotesStore.load(from: tmpNotes)
+let quarantined = (try? FileManager.default.contentsOfDirectory(
+    at: tmpNotes.deletingLastPathComponent(), includingPropertiesForKeys: nil))?
+    .contains { $0.lastPathComponent.hasPrefix("notes.json.corrupt-") } ?? false
+check("corrupt file returns empty state", loaded == NotesData())
+check("corrupt file quarantined (original preserved)",
+      quarantined && !FileManager.default.fileExists(atPath: tmpNotes.path))
+for f in (try? FileManager.default.contentsOfDirectory(at: tmpNotes.deletingLastPathComponent(),
+    includingPropertiesForKeys: nil)) ?? [] where f.lastPathComponent.hasPrefix("notes.json.corrupt-") {
+    try? FileManager.default.removeItem(at: f)
+}
+// 9c. Path encoding must mirror Claude Code's [^a-zA-Z0-9] rule.
+check("underscore encodes like CC", ClaudeCodeMonitor.encodeProjectPath("/Users/x/my_project") == "-Users-x-my-project")
+check("space encodes like CC", ClaudeCodeMonitor.encodeProjectPath("/Users/x/My App") == "-Users-x-My-App")
+check("match helper works", ClaudeCodeMonitor.matches(cwd: "/Users/x/my_project", projectDir: "-Users-x-my-project"))
+// 9d. hooksInstalled must survive JSONSerialization's slash escaping.
+let tmpSettings2 = FileManager.default.temporaryDirectory
+    .appendingPathComponent("cdash-settings2-\(UUID().uuidString).json")
+try! JSONSerialization.data(withJSONObject: [String: Any]()).write(to: tmpSettings2)
+_ = try? ClaudeCodeMonitor.installHooks(settingsURL: tmpSettings2)
+check("hooksInstalled true on file we wrote (slash-escape proof)",
+      ClaudeCodeMonitor.hooksInstalled(settingsURL: tmpSettings2))
+try? FileManager.default.removeItem(at: tmpSettings2)
+// 9e. Unparseable settings.json must ABORT install, not wipe the file.
+let tmpBad = FileManager.default.temporaryDirectory
+    .appendingPathComponent("cdash-bad-\(UUID().uuidString).json")
+try! "not json at all".data(using: .utf8)!.write(to: tmpBad)
+var threw = false
+do { _ = try ClaudeCodeMonitor.installHooks(settingsURL: tmpBad) } catch { threw = true }
+check("install aborts on unparseable settings", threw)
+check("unparseable settings left untouched",
+      (try? String(contentsOf: tmpBad, encoding: .utf8)) == "not json at all")
+try? FileManager.default.removeItem(at: tmpBad)
+// 9f. END-TO-END: the hook script must produce ONE parseable JSONL line from
+// newline-terminated stdin (exactly what Claude Code sends).
+let tmpSettings3 = FileManager.default.temporaryDirectory
+    .appendingPathComponent("cdash-settings3-\(UUID().uuidString).json")
+try! JSONSerialization.data(withJSONObject: [String: Any]()).write(to: tmpSettings3)
+_ = try? ClaudeCodeMonitor.installHooks(settingsURL: tmpSettings3)   // also writes the script
+let eventsBefore = (try? String(contentsOf: ClaudeCodeMonitor.eventsFile, encoding: .utf8))
+    .map { $0.components(separatedBy: "\n").filter { !$0.isEmpty }.count } ?? 0
+let hookRun = Process()
+hookRun.executableURL = URL(fileURLWithPath: "/bin/bash")
+hookRun.arguments = [ClaudeCodeMonitor.hookScript.path, "Notification"]
+let stdinPipe = Pipe()
+hookRun.standardInput = stdinPipe
+try! hookRun.run()
+stdinPipe.fileHandleForWriting.write(Data("{\"session_id\":\"t1\",\"cwd\":\"/tmp/test dir\"}\n".utf8))
+stdinPipe.fileHandleForWriting.closeFile()
+hookRun.waitUntilExit()
+let eventLines = ((try? String(contentsOf: ClaudeCodeMonitor.eventsFile, encoding: .utf8)) ?? "")
+    .components(separatedBy: "\n").filter { !$0.isEmpty }
+check("hook run appended exactly one line", eventLines.count == eventsBefore + 1)
+if let last = eventLines.last, let d = last.data(using: .utf8),
+   let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+    check("event line parses as JSON", obj["event"] as? String == "Notification")
+    check("payload cwd intact", ((obj["payload"] as? [String: Any])?["cwd"] as? String) == "/tmp/test dir")
+} else {
+    check("hook event line is valid JSON", false)
+}
+try? FileManager.default.removeItem(at: tmpSettings3)
+
+print("== 10. LIVE claude.ai endpoint — invalid key must map to .unauthorized ==")
 if onCI {
     print("  SKIP  (datacenter IPs may be WAF-blocked; run locally)")
     print("\n== RESULT: \(failures == 0 ? "ALL PASS" : "\(failures) FAILURE(S)") ==")
