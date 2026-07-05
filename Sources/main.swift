@@ -44,6 +44,12 @@ final class DashboardPanel: NSPanel {
     override func cancelOperation(_ sender: Any?) {
         if let onDismiss { onDismiss() } else { orderOut(nil) }
     }
+
+    /// ⌘W (Window ▸ Close targets the key window) should dismiss the popover
+    /// instead of beeping — the panel has no .closable style bit.
+    override func performClose(_ sender: Any?) {
+        if let onDismiss { onDismiss() } else { orderOut(nil) }
+    }
 }
 
 // MARK: - Carbon hotkey trampoline (C callback can't capture context)
@@ -71,6 +77,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKeyRef: EventHotKeyRef?
     private var hotKeyHandlerInstalled = false
     private var sigtermSource: DispatchSourceSignal?
+    /// AppKit closes all windows DURING terminate teardown (after
+    /// applicationWillTerminate), which would run the board's willClose
+    /// observer and falsely record "user closed the board."
+    private var isTerminating = false
 
     func applicationDidFinishLaunching(_ note: Notification) {
         // Safety net: a thrown exception during launch would otherwise be swallowed
@@ -120,7 +130,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         renderStatusImage()
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        isTerminating = true
+        return .terminateNow
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        isTerminating = true
         model.flushNotesNow()
     }
 
@@ -200,6 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let win = boardWindow {
             NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
+            if win.isMiniaturized { win.deminiaturize(nil) }
             win.makeKeyAndOrderFront(nil)
             return
         }
@@ -228,9 +245,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             token = nil
             MainActor.assumeIsolated {
                 guard let self else { return }
+                self.model.flushNotesNow()
+                // Only a USER close means "don't reopen at launch" — teardown
+                // closes during quit must leave the reopen state intact.
+                guard !self.isTerminating else { return }
                 self.boardWindow = nil
                 Prefs.boardWasOpen = false
-                self.model.flushNotesNow()
                 if self.auxWindows.isEmpty { NSApp.setActivationPolicy(.accessory) }
             }
         }
@@ -244,7 +264,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func toggleBoardWindow() {
-        if let win = boardWindow, win.isVisible {
+        if let win = boardWindow, win.isVisible, !win.isMiniaturized {
             if win.isKeyWindow {
                 win.performClose(nil)
             } else {
@@ -253,7 +273,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 win.makeKeyAndOrderFront(nil)
             }
         } else {
-            openBoardWindow()
+            openBoardWindow()   // also deminiaturizes an existing window
         }
     }
 
@@ -505,7 +525,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.auxWindows.removeAll { $0 === (note.object as? NSWindow) }
-                if self.auxWindows.isEmpty { NSApp.setActivationPolicy(.accessory) }
+                // The board window keeps the app .regular — only demote when
+                // NOTHING window-like remains.
+                if self.auxWindows.isEmpty && self.boardWindow == nil {
+                    NSApp.setActivationPolicy(.accessory)
+                }
             }
         }
         auxWindows.append(win)

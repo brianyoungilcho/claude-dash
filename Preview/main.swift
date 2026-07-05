@@ -79,7 +79,7 @@ MainActor.assumeIsolated {
             HStack {
                 Text("Claude Dash").font(.system(size: 13, weight: .semibold))
                 Spacer()
-                Image(systemName: "pin.fill").foregroundStyle(.tint)
+                Image(systemName: "macwindow")
                 Image(systemName: "gearshape")
                 Image(systemName: "arrow.clockwise")
             }.padding(.horizontal, 12).padding(.vertical, 8)

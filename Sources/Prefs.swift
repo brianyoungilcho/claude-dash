@@ -63,7 +63,7 @@ enum Prefs {
         set { d.set(newValue.rawValue, forKey: "menuBarMode") }
     }
 
-    /// Global hotkey (⌃⌥⌘D) toggles the dashboard.
+    /// Global hotkey (⌃⌥⌘D) toggles the board window.
     static var hotkeyEnabled: Bool {
         get { d.object(forKey: "hotkeyEnabled") == nil ? true : d.bool(forKey: "hotkeyEnabled") }
         set { d.set(newValue, forKey: "hotkeyEnabled") }

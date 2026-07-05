@@ -172,6 +172,7 @@ Login Items**, if one remains.
 | `Sources/Views.swift` | SwiftUI: dashboard, metric rows, add/edit sheets, preferences |
 | `Sources/Prefs.swift` | Typed UserDefaults settings |
 | `Sources/WebSignIn.swift` | In-app claude.ai login window (isolated cookie store) |
+| `Sources/Board.swift` | Standalone board window: adaptive card grid at the user's text scale |
 | `Sources/main.swift` | App bootstrap, floating panel, menu bar, hotkey, update check |
 | `build.sh` | Universal (arm64+x86_64) build + bundle + ad-hoc sign |
 | `Tests/main.swift` | Headless tests (CI-safe; live-endpoint check runs locally) |
@@ -186,7 +187,7 @@ swiftc -swift-version 5 -o .build/tests Tests/main.swift Sources/Core.swift Sour
 # render the views to PNGs (Preview has its own main.swift, so exclude Sources/main.swift)
 swiftc -swift-version 5 -o .build/preview Preview/main.swift \
   Sources/Core.swift Sources/AppModel.swift Sources/Views.swift \
-  Sources/Prefs.swift Sources/WebSignIn.swift Sources/Notes.swift Sources/ClaudeCode.swift \
+  Sources/Prefs.swift Sources/WebSignIn.swift Sources/Notes.swift Sources/ClaudeCode.swift Sources/Board.swift \
   -framework AppKit -framework SwiftUI -framework WebKit -framework UserNotifications
 OUT=/tmp ./.build/preview
 ```
