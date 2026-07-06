@@ -23,8 +23,15 @@ in the right browser profile.
 3. **Verify**: `pgrep -f "Claude Dash.app/Contents/MacOS/ClaudeDash"` returns a
    PID, and a small **gauge icon appears in the menu bar** at the top-right of
    the screen (describe it visually — menu-bar strings vary by OS language).
-   If the process runs but no icon shows on macOS 26+: System Settings →
-   Menu Bar → allow Claude Dash. Exceptions log to `/tmp/claudedash-debug.log`.
+   If the process runs but no icon shows on a notched macOS 26 Mac, the
+   status item was parked in the left-of-notch overflow region (where macOS
+   never draws status items) because it had no persisted position — fixed in
+   v1.5.3, which sets `autosaveName`/preferred-position in `setupStatusItem`
+   (there is **no** per-app menu-bar allow-list in macOS 26; don't look for one).
+   Diagnose with `screencapture` of the menu bar plus `osascript` reading the
+   position of `menu bar item 1 of menu bar 2` of the ClaudeDash process — an
+   item x < ~826 on a 1512-pt display is parked left of the notch and hidden.
+   Exceptions log to `/tmp/claudedash-debug.log`.
 4. **First account**: right-click the gauge icon → **Add Account…** → prefer
    the **Sign in…** button (opens a claude.ai login window and captures the
    session key automatically). If the login provider refuses the embedded
