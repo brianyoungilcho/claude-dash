@@ -22,6 +22,18 @@ enum ClaudeCodeMonitor {
     static var hookScript: URL { AppSupport.dir.appendingPathComponent("cc-hook.sh") }
     private static let hookMarker = "Claude Dash/cc-hook.sh"
 
+    /// The current Claude Code login's organization, from ~/.claude.json
+    /// (metadata only — credentials live elsewhere). Lets the board attach
+    /// sessions to the exact account whose org the CLI is burning usage from.
+    static func currentLoginOrgUuid(configURL: URL? = nil) -> String? {
+        let url = configURL ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude.json")
+        guard let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let account = obj["oauthAccount"] as? [String: Any] else { return nil }
+        return account["organizationUuid"] as? String
+    }
+
     /// Sessions reconstructed purely from hook events within `window` seconds.
     /// No hooks (or no recent events) → empty → the UI section disappears.
     static func sessionsFromEvents(eventsURL: URL? = nil, window: TimeInterval = 3600,
@@ -80,7 +92,10 @@ enum ClaudeCodeMonitor {
         let script = """
         #!/bin/bash
         # Claude Dash event hook — appends one JSON line per Claude Code event.
-        DIR="$HOME/Library/Application Support/Claude Dash"
+        # CLAUDE_DASH_DIR override exists so the test suite never touches the
+        # real events file (it did once; a phantom "test dir" session haunted
+        # the board for an hour).
+        DIR="${CLAUDE_DASH_DIR:-$HOME/Library/Application Support/Claude Dash}"
         FILE="$DIR/cc-events.jsonl"
         mkdir -p "$DIR"
         # rotate if large (keep the last ~500 lines)

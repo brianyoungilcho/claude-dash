@@ -93,12 +93,11 @@ MainActor.assumeIsolated {
                            noteText: sampleNotes[acct.id]?.0 ?? "",
                            flagged: sampleNotes[acct.id]?.1 ?? false,
                            convos: sampleConvos[acct.id] ?? [],
+                           ccSessions: acct.id == "a" ? ccSessions : [],
                            open: {}, openUsage: {}, openConvo: { _ in },
                            edit: {}, remove: {}, toggleFlag: {}, noteChanged: { _ in })
                 Divider()
             }
-            ClaudeCodeSection(sessions: ccSessions)
-            Divider()
             HStack {
                 Text("Add account…").font(.system(size: 12)).foregroundStyle(.tint)
                 Spacer()
@@ -124,7 +123,8 @@ MainActor.assumeIsolated {
                          n.accounts["b"] = AccountNote(text: sampleNotes["b"]!.0, flagged: true)
                          return n
                      }(),
-                     convos: sampleConvos, ccSessions: ccSessions, lastRefresh: now,
+                     convos: sampleConvos, ccSessions: [],
+                     ccByAccount: ["a": ccSessions], lastRefresh: now,
                      embedInScrollView: false)
             .environment(\.dashScale, textScale)
             .frame(width: width)

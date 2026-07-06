@@ -366,6 +366,7 @@ struct DashboardView: View {
                                 noteText: model.notes.accounts[account.id]?.text ?? "",
                                 flagged: model.isFlagged(account.id),
                                 convos: Prefs.showConversations ? (model.convos[account.id] ?? []) : [],
+                                ccSessions: model.ccSessions(for: account.id),
                                 open: { model.openChrome(account, path: "/new") },
                                 openUsage: { model.openChrome(account, path: "/settings/usage") },
                                 openConvo: { model.openChrome(account, path: "/chat/\($0.uuid)") },
@@ -379,8 +380,8 @@ struct DashboardView: View {
                             )
                             Divider()
                         }
-                        if !model.ccSessions.isEmpty {
-                            ClaudeCodeSection(sessions: model.ccSessions)
+                        if !model.ccUnmatchedSessions.isEmpty {
+                            ClaudeCodeSection(sessions: model.ccUnmatchedSessions)
                             Divider()
                         }
                     }
@@ -436,6 +437,7 @@ struct AccountRow: View {
     var noteText: String = ""
     var flagged: Bool = false
     var convos: [Convo] = []
+    var ccSessions: [CCSession] = []   // Claude Code sessions owned by this account's org
     var open: () -> Void
     var openUsage: () -> Void
     var openConvo: (Convo) -> Void = { _ in }
@@ -461,6 +463,9 @@ struct AccountRow: View {
                     statusBadge
                 }
                 content
+                if !ccSessions.isEmpty {
+                    CCSessionLines(sessions: ccSessions)
+                }
                 if !convos.isEmpty {
                     ConvoList(convos: convos, open: openConvo)
                 }
@@ -593,8 +598,42 @@ struct AccountRow: View {
     }
 }
 
-// MARK: - Claude Code section (local sessions; separate because CLI identity
-// doesn't map 1:1 onto claude.ai accounts — same email can own several orgs)
+// MARK: - Claude Code session lines (inline on the owning account's card)
+
+struct CCSessionLines: View {
+    var sessions: [CCSession]
+    @Environment(\.dashScale) private var s
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2 * s) {
+            ForEach(sessions) { session in
+                HStack(spacing: 5) {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 8 * s))
+                        .foregroundStyle(session.waiting ? .orange : .secondary)
+                    Text("Claude Code · \(session.projectDisplay)")
+                        .font(.system(size: 10 * s)).lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text(session.waiting ? "waiting for your input" : relative(session.lastActivity))
+                        .font(.system(size: 9 * s))
+                        .foregroundStyle(session.waiting ? .orange : .secondary)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Claude Code in \(session.projectDisplay): \(session.waiting ? "waiting for your input" : "active recently")")
+            }
+        }
+    }
+
+    private func relative(_ d: Date) -> String {
+        let mins = Int(-d.timeIntervalSinceNow) / 60
+        if mins < 1 { return "active now" }
+        if mins < 60 { return "\(mins)m ago" }
+        return "\(mins / 60)h ago"
+    }
+}
+
+// MARK: - Claude Code section (fallback ONLY for sessions whose CLI login org
+// matches no board account)
 
 struct ClaudeCodeSection: View {
     var sessions: [CCSession]

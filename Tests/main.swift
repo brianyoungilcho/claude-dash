@@ -218,20 +218,28 @@ let tmpSettings3 = FileManager.default.temporaryDirectory
     .appendingPathComponent("cdash-settings3-\(UUID().uuidString).json")
 try! JSONSerialization.data(withJSONObject: [String: Any]()).write(to: tmpSettings3)
 _ = try? ClaudeCodeMonitor.installHooks(settingsURL: tmpSettings3)   // also writes the script
-let eventsBefore = (try? String(contentsOf: ClaudeCodeMonitor.eventsFile, encoding: .utf8))
-    .map { $0.components(separatedBy: "\n").filter { !$0.isEmpty }.count } ?? 0
+// Run the script against an ISOLATED events dir — a previous version of this
+// test wrote into the real events file and haunted the board with a phantom
+// "test dir" session.
+let isolatedDir = FileManager.default.temporaryDirectory
+    .appendingPathComponent("cdash-hookrun-\(UUID().uuidString)", isDirectory: true)
+try! FileManager.default.createDirectory(at: isolatedDir, withIntermediateDirectories: true)
+let prodEventsBefore = (try? Data(contentsOf: ClaudeCodeMonitor.eventsFile))?.count ?? -1
 let hookRun = Process()
 hookRun.executableURL = URL(fileURLWithPath: "/bin/bash")
 hookRun.arguments = [ClaudeCodeMonitor.hookScript.path, "Notification"]
+hookRun.environment = ProcessInfo.processInfo.environment
+    .merging(["CLAUDE_DASH_DIR": isolatedDir.path]) { _, new in new }
 let stdinPipe = Pipe()
 hookRun.standardInput = stdinPipe
 try! hookRun.run()
 stdinPipe.fileHandleForWriting.write(Data("{\"session_id\":\"t1\",\"cwd\":\"/tmp/test dir\"}\n".utf8))
 stdinPipe.fileHandleForWriting.closeFile()
 hookRun.waitUntilExit()
-let eventLines = ((try? String(contentsOf: ClaudeCodeMonitor.eventsFile, encoding: .utf8)) ?? "")
+let isolatedEvents = isolatedDir.appendingPathComponent("cc-events.jsonl")
+let eventLines = ((try? String(contentsOf: isolatedEvents, encoding: .utf8)) ?? "")
     .components(separatedBy: "\n").filter { !$0.isEmpty }
-check("hook run appended exactly one line", eventLines.count == eventsBefore + 1)
+check("hook run wrote exactly one line (isolated dir)", eventLines.count == 1)
 if let last = eventLines.last, let d = last.data(using: .utf8),
    let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
     check("event line parses as JSON", obj["event"] as? String == "Notification")
@@ -239,7 +247,21 @@ if let last = eventLines.last, let d = last.data(using: .utf8),
 } else {
     check("hook event line is valid JSON", false)
 }
+let prodEventsAfter = (try? Data(contentsOf: ClaudeCodeMonitor.eventsFile))?.count ?? -1
+check("REAL events file untouched by the test", prodEventsBefore == prodEventsAfter)
 try? FileManager.default.removeItem(at: tmpSettings3)
+try? FileManager.default.removeItem(at: isolatedDir)
+
+print("== 8c. Claude Code owner matching (org uuid → account card) ==")
+let ownerAccounts = [
+    Account(id: "acct1", displayName: "Personal", orgUuid: "org-aaa", orgName: "Personal",
+            chromeProfileDir: "Default", chromeProfileLabel: "x"),
+    Account(id: "acct2", displayName: "Work", orgUuid: "org-bbb", orgName: "Work",
+            chromeProfileDir: "Profile 1", chromeProfileLabel: "y"),
+]
+check("login org matches its account", matchCCOwner(loginOrgUuid: "org-bbb", accounts: ownerAccounts) == "acct2")
+check("unknown org matches nothing", matchCCOwner(loginOrgUuid: "org-zzz", accounts: ownerAccounts) == nil)
+check("nil login matches nothing", matchCCOwner(loginOrgUuid: nil, accounts: ownerAccounts) == nil)
 
 print("== 10. LIVE claude.ai endpoint — invalid key must map to .unauthorized ==")
 if onCI {

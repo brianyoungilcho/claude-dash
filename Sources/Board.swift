@@ -10,7 +10,8 @@ struct BoardContent: View {
     var usage: [String: UsageState]
     var notes: NotesData
     var convos: [String: [Convo]]
-    var ccSessions: [CCSession]
+    var ccSessions: [CCSession]          // unmatched-only (standalone card)
+    var ccByAccount: [String: [CCSession]] = [:]   // owner account id → sessions
     var lastRefresh: Date?
     var displayTick: Int = 0
     var isRefreshing = false
@@ -69,6 +70,7 @@ struct BoardContent: View {
                             noteText: notes.accounts[account.id]?.text ?? "",
                             flagged: notes.accounts[account.id]?.flagged == true,
                             convos: Prefs.showConversations ? (convos[account.id] ?? []) : [],
+                            ccSessions: ccByAccount[account.id] ?? [],
                             open: { open(account, "/new") },
                             openUsage: { open(account, "/settings/usage") },
                             openConvo: { open(account, "/chat/\($0.uuid)") },
@@ -126,7 +128,8 @@ struct BoardView: View {
             usage: model.usage,
             notes: model.notes,
             convos: model.convos,
-            ccSessions: model.ccSessions,
+            ccSessions: model.ccUnmatchedSessions,
+            ccByAccount: model.ccOwnerAccountId.map { [$0: model.ccSessions] } ?? [:],
             lastRefresh: model.lastRefresh,
             displayTick: model.displayTick,
             isRefreshing: model.isRefreshing,

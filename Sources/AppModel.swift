@@ -14,6 +14,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var notes: NotesData = NotesStore.load()
     @Published private(set) var convos: [String: [Convo]] = [:]
     @Published private(set) var ccSessions: [CCSession] = []
+    /// Board account that owns the current Claude Code login (matched by the
+    /// CLI's organizationUuid). Sessions render on that account's card; the
+    /// standalone section only appears when no account matches.
+    @Published private(set) var ccOwnerAccountId: String?
     /// True while a user-initiated refresh is in flight (drives the spinner).
     @Published private(set) var isRefreshing = false
 
@@ -259,11 +263,30 @@ final class AppModel: ObservableObject {
         isRefreshing = false
     }
 
-    /// Rebuild Claude Code sessions from hook events (empty unless the user
-    /// opted into hooks — the UI section hides itself).
+    /// Rebuild Claude Code sessions from hook events. Strictly hooks-only:
+    /// without the opt-in install, stray events (e.g. from a test run) must
+    /// never surface anything.
     func refreshClaudeCode() {
+        guard ClaudeCodeMonitor.hooksInstalled() else {
+            if !ccSessions.isEmpty { ccSessions = [] }
+            if ccOwnerAccountId != nil { ccOwnerAccountId = nil }
+            return
+        }
         let sessions = ClaudeCodeMonitor.sessionsFromEvents()
         if sessions != ccSessions { ccSessions = sessions }
+        let owner = matchCCOwner(loginOrgUuid: ClaudeCodeMonitor.currentLoginOrgUuid(),
+                                 accounts: accounts)
+        if owner != ccOwnerAccountId { ccOwnerAccountId = owner }
+    }
+
+    /// Sessions for a specific account card (only the CC owner gets them).
+    func ccSessions(for accountId: String) -> [CCSession] {
+        ccOwnerAccountId == accountId ? ccSessions : []
+    }
+
+    /// Sessions with no owning account — rendered in the standalone section.
+    var ccUnmatchedSessions: [CCSession] {
+        ccOwnerAccountId == nil ? ccSessions : []
     }
 
     /// Burn-rate projection: at the current pace, when does session usage hit

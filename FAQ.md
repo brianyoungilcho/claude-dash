@@ -70,7 +70,9 @@ it yourself) if the notes matter.
 Optional (Preferences → Install). They add two entries to
 `~/.claude/settings.json` (a backup is written first) that append one JSON
 line per event to a local file, so the board can show "waiting for your
-input." They run locally, add ~no overhead, and Remove in Preferences puts
+input." Sessions appear on the card of the account whose organization the
+CLI is logged into (falling back to a separate section only when no account
+matches). They run locally, add ~no overhead, and Remove in Settings puts
 everything back. Your existing hooks are preserved — entries are merged, not
 overwritten.
 

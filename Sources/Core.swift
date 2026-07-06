@@ -73,6 +73,13 @@ struct Convo: Equatable, Identifiable {
     var id: String { uuid }
 }
 
+/// Which board account owns the Claude Code login's organization? Pure so
+/// it's unit-testable without the UI layer.
+func matchCCOwner(loginOrgUuid: String?, accounts: [Account]) -> String? {
+    guard let loginOrgUuid else { return nil }
+    return accounts.first { $0.orgUuid == loginOrgUuid }?.id
+}
+
 /// Footer "Updated …" text + whether it's gone stale (older than 2 poll cycles).
 /// Pure so it's unit-testable without the UI layer.
 func updatedLabel(_ date: Date?, pollInterval: TimeInterval, now: Date = Date()) -> (text: String, stale: Bool)? {
