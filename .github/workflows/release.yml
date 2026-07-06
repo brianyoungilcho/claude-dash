@@ -22,3 +22,39 @@ jobs:
           gh release create "$GITHUB_REF_NAME" "Claude-Dash-${GITHUB_REF_NAME#v}.zip" \
             --title "Claude Dash $GITHUB_REF_NAME" --generate-notes \
             --notes "**Install:** unzip, drag Claude Dash.app into /Applications, then run \`xattr -dr com.apple.quarantine \"/Applications/Claude Dash.app\"\` (the app is not notarized). Building from source avoids this — see the README."
+
+      # Bumps the Homebrew tap so `brew upgrade` serves this release.
+      # Requires the HOMEBREW_TAP_TOKEN secret: a fine-grained PAT scoped to the
+      # brianyoungilcho/homebrew-tap repo with Contents: Read and write.
+      # Set it once with:
+      #   gh secret set HOMEBREW_TAP_TOKEN --repo brianyoungilcho/claude-dash
+      - name: Update Homebrew tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAP_TOKEN:-}" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN is not set — release published but the Homebrew tap was NOT bumped. Add the secret (see this workflow's comment)." >&2
+            exit 1
+          fi
+          VERSION="${GITHUB_REF_NAME#v}"
+          SHA="$(shasum -a 256 "Claude-Dash-${VERSION}.zip" | awk '{print $1}')"
+          echo "Bumping tap to ${VERSION} (sha256 ${SHA})"
+
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/brianyoungilcho/homebrew-tap.git" tap
+          CASK="tap/Casks/claude-dash.rb"
+          # Only the top-level `version` and `sha256` lines change; the url
+          # interpolates #{version} so it needs no edit.
+          sed -i '' -E "s/^  version \".*\"/  version \"${VERSION}\"/" "$CASK"
+          sed -i '' -E "s/^  sha256 \".*\"/  sha256 \"${SHA}\"/" "$CASK"
+
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/claude-dash.rb
+          if git diff --cached --quiet; then
+            echo "Cask already at ${VERSION}; nothing to commit."
+          else
+            git commit -m "claude-dash ${VERSION}"
+            git push
+          fi
