@@ -70,7 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var panel: DashboardPanel!
     private var hostingView: NSHostingView<DashboardView>!
-    private var auxWindows: [NSWindow] = []
+    private var auxWindows: [String: NSWindow] = [:]   // keyed by dialog identity
     private var boardWindow: NSWindow?
     private var cancellables = Set<AnyCancellable>()
     private var outsideClickMonitor: Any?
@@ -148,6 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onAdd: { [weak self] in self?.showAddAccount() },
             onEdit: { [weak self] acct in self?.showEdit(acct) },
             onPrefs: { [weak self] in self?.showPreferences() },
+            onRemove: { [weak self] acct in self?.confirmRemove(acct) },
             onOpenBoard: { [weak self] in
                 self?.hidePanel()
                 self?.openBoardWindow()
@@ -224,7 +225,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             model: model,
             onAdd: { [weak self] in self?.showAddAccount() },
             onEdit: { [weak self] acct in self?.showEdit(acct) },
-            onPrefs: { [weak self] in self?.showPreferences() }
+            onPrefs: { [weak self] in self?.showPreferences() },
+            onRemove: { [weak self] acct in self?.confirmRemove(acct) }
         )
         let win = NSWindow(contentViewController: NSHostingController(rootView: view))
         win.title = "Claude Dash"
@@ -288,13 +290,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let about = NSMenuItem(title: "About Claude Dash", action: #selector(openAbout), keyEquivalent: "")
         about.target = self
         appMenu.addItem(about)
-        let prefs = NSMenuItem(title: "Preferences…", action: #selector(openPreferences), keyEquivalent: ",")
+        let prefs = NSMenuItem(title: "Settings…", action: #selector(openPreferences), keyEquivalent: ",")
         prefs.target = self
         appMenu.addItem(prefs)
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit Claude Dash",
                         action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
+
+        // File — makes the ⌘N / ⌘R shown in the status menu actually fire when
+        // a Claude Dash window is frontmost.
+        let fileItem = NSMenuItem(); main.addItem(fileItem)
+        let file = NSMenu(title: "File")
+        let add = NSMenuItem(title: "Add Account…", action: #selector(addAccountMenu), keyEquivalent: "n")
+        add.target = self
+        file.addItem(add)
+        let refresh = NSMenuItem(title: "Refresh", action: #selector(refreshNow), keyEquivalent: "r")
+        refresh.target = self
+        file.addItem(refresh)
+        fileItem.submenu = file
 
         let editItem = NSMenuItem(); main.addItem(editItem)
         let edit = NSMenu(title: "Edit")
@@ -309,7 +323,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let windowItem = NSMenuItem(); main.addItem(windowItem)
         let window = NSMenu(title: "Window")
-        let board = NSMenuItem(title: "Claude Dash Board", action: #selector(openBoardWindow), keyEquivalent: "")
+        let board = NSMenuItem(title: "Claude Dash Board", action: #selector(openBoardWindow), keyEquivalent: "b")
         board.target = self
         window.addItem(board)
         window.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
@@ -343,7 +357,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(withTitle: "About Claude Dash (v\(version))", action: #selector(openAbout), keyEquivalent: "")
         menu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
-        menu.addItem(withTitle: "Preferences…", action: #selector(openPreferences), keyEquivalent: ",")
+        menu.addItem(withTitle: "Settings…", action: #selector(openPreferences), keyEquivalent: ",")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Open Board Window", action: #selector(openBoardWindow), keyEquivalent: "b")
         menu.addItem(withTitle: "Open Quick Glance", action: #selector(openDashboard), keyEquivalent: "")
@@ -359,7 +373,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openAbout() { NSWorkspace.shared.open(URL(string: repoURL)!) }
     @objc private func openDashboard() { if !panel.isVisible { showPanel() } }
-    @objc private func refreshNow() { Task { await model.refreshAll() } }
+    @objc private func refreshNow() { Task { await model.userRefresh() } }
     @objc private func addAccountMenu() { showAddAccount() }
     @objc private func openPreferences() { showPreferences() }
 
@@ -420,6 +434,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             statusItem.button?.title = "Dash"   // keep the text fallback if rendering failed
         }
+        // The rasterized image carries no SwiftUI a11y labels — describe the
+        // button itself for VoiceOver + hover.
+        let summary = statusSummary()
+        statusItem.button?.toolTip = summary + "\nClick: dashboard · Right-click: menu"
+        statusItem.button?.setAccessibilityLabel(summary)
+    }
+
+    private func statusSummary() -> String {
+        if model.accounts.isEmpty { return "Claude Dash — no accounts" }
+        let parts = model.accounts.prefix(4).map { a -> String in
+            switch model.usage[a.id] {
+            case .ok(let u): return "\(a.displayName) \(Int(u.session?.utilization ?? 0))%"
+            case .unauthorized: return "\(a.displayName) key expired"
+            default: return "\(a.displayName) —"
+            }
+        }
+        return "Claude Dash — " + parts.joined(separator: ", ")
+            + (model.anyAttention ? " · needs attention" : "")
     }
 
     // MARK: Login item
@@ -467,22 +499,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: Aux windows (add / edit / preferences)
+    // MARK: Destructive remove (confirmed)
+
+    /// Session key + hand-typed note are unrecoverable, so confirm first.
+    func confirmRemove(_ account: Account) {
+        // Bring the app forward so the sheet-style alert is visible even from
+        // the menu-bar popover.
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Remove “\(account.displayName)”?"
+        alert.informativeText = "This deletes its stored session key and any note you've written for it. This can't be undone."
+        alert.addButton(withTitle: "Remove")   // .alertFirstButtonReturn
+        alert.addButton(withTitle: "Cancel")
+        if let destructive = alert.buttons.first { destructive.hasDestructiveAction = true }
+        let confirmed = alert.runModal() == .alertFirstButtonReturn
+        // Restore accessory policy if no real window is keeping us .regular.
+        if auxWindows.isEmpty && boardWindow == nil { NSApp.setActivationPolicy(.accessory) }
+        guard confirmed else { return }
+        // Defer off this button's call stack — the Remove button may live inside
+        // the very Edit window we're about to close.
+        DispatchQueue.main.async { [weak self] in
+            self?.auxWindows["edit-\(account.id)"]?.close()
+            self?.model.removeAccount(account)
+        }
+    }
+
+    // MARK: Aux windows (add / edit / settings)
 
     private func showAddAccount() {
-        presentAuxWindow(title: "Add Account") { done in
+        presentAuxWindow(identity: "add", title: "Add Account") { done in
             AnyView(AddAccountView(model: model, onDone: done))
         }
     }
 
     private func showEdit(_ account: Account) {
-        presentAuxWindow(title: "Edit Account") { done in
-            AnyView(EditAccountView(model: model, account: account, onDone: done))
+        // Identity keyed by account so Edit on B doesn't refocus A's editor.
+        presentAuxWindow(identity: "edit-\(account.id)", title: "Edit Account") { [weak self] done in
+            AnyView(EditAccountView(model: self?.model ?? AppModel(), account: account,
+                                    onDone: done,
+                                    onRemove: { acct in self?.confirmRemove(acct) }))
         }
     }
 
     private func showPreferences() {
-        presentAuxWindow(title: "Preferences") { _ in
+        presentAuxWindow(identity: "settings", title: "Settings") { _ in
             AnyView(PreferencesView(
                 model: model,
                 onLoginItemToggle: { [weak self] on in self?.setLoginItem(on) },
@@ -498,10 +560,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// restore the accessory policy identically.
     private final class WeakWindowBox { weak var window: NSWindow? }
 
-    private func presentAuxWindow(title: String, _ make: (@escaping () -> Void) -> AnyView) {
-        // Single instance per dialog: focus the existing window instead of
+    private func presentAuxWindow(identity: String, title: String,
+                                  _ make: (@escaping () -> Void) -> AnyView) {
+        // Single instance per identity: focus the existing window instead of
         // stacking duplicates with divergent state snapshots.
-        if let existing = auxWindows.first(where: { $0.title == title }) {
+        if let existing = auxWindows[identity] {
+            NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
             existing.makeKeyAndOrderFront(nil)
             return
@@ -519,12 +583,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var token: NSObjectProtocol?
         token = NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification, object: win, queue: .main
-        ) { [weak self] note in
+        ) { [weak self] _ in
             if let token { NotificationCenter.default.removeObserver(token) }
             token = nil
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.auxWindows.removeAll { $0 === (note.object as? NSWindow) }
+                self.auxWindows[identity] = nil
                 // The board window keeps the app .regular — only demote when
                 // NOTHING window-like remains.
                 if self.auxWindows.isEmpty && self.boardWindow == nil {
@@ -532,7 +596,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
-        auxWindows.append(win)
+        auxWindows[identity] = win
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         win.makeKeyAndOrderFront(nil)

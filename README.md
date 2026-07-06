@@ -20,10 +20,11 @@ at a glance, one click to open claude.ai in the right browser profile.
 - **Board window** — a real, standalone macOS window (⌃⌥⌘D, or the window
   button in the popover): accounts as side-by-side cards, **larger text**
   (Standard/Large/X-Large in Preferences), per-account **notes** (`- [ ] task`
-  lines become checkboxes), a global scratchpad, and a manual **attention
-  flag** per account that also lights a dot in the menu bar. Resizable,
-  remembers its frame, optional always-on-top, reopens at launch if you had
-  it open.
+  lines become checkboxes; click away, press Esc, or ⌘⏎ to finish and save),
+  a global scratchpad, and a manual **attention flag** per account that also
+  lights a dot in the menu bar. Resizable, remembers its frame, optional
+  always-on-top, reopens at launch if you had it open. Standard shortcuts work
+  (⌘R refresh, ⌘N add account, ⌘B board, ⌘, settings, ⌘C/⌘V in fields).
 - **Signals** — each account shows its **recent claude.ai conversations**
   (last 48 hours only — no stale noise; click one to open it in the right
   profile). Opt into the bundled Claude Code hooks (Preferences → Install)
@@ -117,7 +118,7 @@ The menu-bar popover stays as the compact quick glance:
 
 ## Preferences
 
-Gear icon in the dashboard (or right-click → Preferences…): refresh interval,
+Gear icon in the dashboard (or right-click → Settings…, ⌘,): refresh interval,
 account sort order (added / most headroom / most used), menu-bar display mode,
 used-vs-remaining labels, notification threshold + reset alerts,
 launch-at-login, hotkey, board float behavior and text size, the

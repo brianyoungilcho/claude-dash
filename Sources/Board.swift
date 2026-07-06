@@ -12,6 +12,8 @@ struct BoardContent: View {
     var convos: [String: [Convo]]
     var ccSessions: [CCSession]
     var lastRefresh: Date?
+    var displayTick: Int = 0
+    var isRefreshing = false
 
     var onAdd: () -> Void = {}
     var onEdit: (Account) -> Void = { _ in }
@@ -23,6 +25,8 @@ struct BoardContent: View {
     var noteChanged: (Account, String) -> Void = { _, _ in }
     var globalNoteChanged: (String) -> Void = { _ in }
     var noteCommitted: () -> Void = {}
+    var moveUp: (Account) -> (() -> Void)? = { _ in nil }
+    var moveDown: (Account) -> (() -> Void)? = { _ in nil }
     /// Preview harness renders the inner content directly — ScrollView+LazyVGrid
     /// produce nothing under a headless ImageRenderer.
     var embedInScrollView = true
@@ -34,19 +38,24 @@ struct BoardContent: View {
     }
 
     var body: some View {
-        Group {
-            if embedInScrollView {
-                ScrollView { inner }
+        VStack(spacing: 0) {
+            header
+                .padding(.horizontal, 16).padding(.vertical, 10)
+            Divider()
+            if accounts.isEmpty {
+                EmptyAccountsView(onAdd: onAdd)
+                    .frame(maxHeight: .infinity)
+            } else if embedInScrollView {
+                ScrollView { grid }.endEditingOnBackgroundTap()
             } else {
-                inner
+                grid
             }
         }
-        .frame(minWidth: 380 * s, minHeight: 320)
+        .frame(minWidth: 400, minHeight: 320)
     }
 
-    private var inner: some View {
+    private var grid: some View {
         VStack(alignment: .leading, spacing: 12) {
-            header
             NoteView(text: notes.global,
                      placeholder: "Scratchpad — what's going on across everything…",
                      onChange: globalNoteChanged,
@@ -67,7 +76,9 @@ struct BoardContent: View {
                             remove: { remove(account) },
                             toggleFlag: { toggleFlag(account) },
                             noteChanged: { noteChanged(account, $0) },
-                            noteCommitted: noteCommitted
+                            noteCommitted: noteCommitted,
+                            moveUp: moveUp(account),
+                            moveDown: moveDown(account)
                         )
                     }
                 }
@@ -89,14 +100,15 @@ struct BoardContent: View {
         HStack {
             Button("Add account…", action: onAdd).controlSize(.regular)
             Spacer()
-            if let d = lastRefresh {
-                Text("Updated \(d.formatted(date: .omitted, time: .shortened))")
-                    .font(.system(size: 10 * s)).foregroundStyle(.secondary)
-            }
+            UpdatedFooterText(lastRefresh: lastRefresh, tick: displayTick)
             Button(action: onPrefs) { Image(systemName: "gearshape") }
-                .buttonStyle(.borderless).help("Preferences")
-            Button(action: onRefresh) { Image(systemName: "arrow.clockwise") }
-                .buttonStyle(.borderless).help("Refresh all")
+                .buttonStyle(.borderless).help("Settings")
+            if isRefreshing {
+                ProgressView().controlSize(.small).frame(width: 20)
+            } else {
+                Button(action: onRefresh) { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.borderless).help("Refresh all").frame(width: 20)
+            }
         }
     }
 }
@@ -106,6 +118,7 @@ struct BoardView: View {
     var onAdd: () -> Void
     var onEdit: (Account) -> Void
     var onPrefs: () -> Void
+    var onRemove: (Account) -> Void = { _ in }
 
     var body: some View {
         BoardContent(
@@ -115,16 +128,20 @@ struct BoardView: View {
             convos: model.convos,
             ccSessions: model.ccSessions,
             lastRefresh: model.lastRefresh,
+            displayTick: model.displayTick,
+            isRefreshing: model.isRefreshing,
             onAdd: onAdd,
             onEdit: onEdit,
             onPrefs: onPrefs,
             onRefresh: { Task { await model.userRefresh() } },
             open: { model.openChrome($0, path: $1) },
             toggleFlag: { model.toggleFlag(accountId: $0.id) },
-            remove: { model.removeAccount($0) },
+            remove: onRemove,
             noteChanged: { model.setNote(accountId: $0.id, text: $1) },
             globalNoteChanged: { model.setGlobalNote($0) },
-            noteCommitted: { model.flushNotesNow() }
+            noteCommitted: { model.flushNotesNow() },
+            moveUp: { a in moveClosure(a, in: model.sortedAccounts, by: -1, model: model) },
+            moveDown: { a in moveClosure(a, in: model.sortedAccounts, by: 1, model: model) }
         )
         .environment(\.dashScale, CGFloat(Prefs.boardTextScale))
     }

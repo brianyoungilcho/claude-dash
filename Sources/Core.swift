@@ -73,6 +73,20 @@ struct Convo: Equatable, Identifiable {
     var id: String { uuid }
 }
 
+/// Footer "Updated …" text + whether it's gone stale (older than 2 poll cycles).
+/// Pure so it's unit-testable without the UI layer.
+func updatedLabel(_ date: Date?, pollInterval: TimeInterval, now: Date = Date()) -> (text: String, stale: Bool)? {
+    guard let date else { return nil }
+    let age = now.timeIntervalSince(date)
+    let stale = age > max(120, 2 * pollInterval)
+    if age < 90 { return (stale ? "Updated just now" : "Updated \(date.formatted(date: .omitted, time: .shortened))", stale) }
+    let mins = Int(age) / 60
+    if mins < 60 { return ("Updated \(mins)m ago", stale) }
+    let hrs = mins / 60
+    if hrs < 24 { return ("Updated \(hrs)h ago", stale) }
+    return ("Updated \(date.formatted(date: .abbreviated, time: .shortened))", stale)
+}
+
 enum UsageError: Error, Equatable {
     case unauthorized
     case rateLimited

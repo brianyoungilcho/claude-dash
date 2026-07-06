@@ -150,6 +150,17 @@ if let data = try? Data(contentsOf: tmpSettings),
 } else { check("hooks merge readback", false) }
 try? FileManager.default.removeItem(at: tmpSettings)
 
+print("== 8b. Footer staleness label ==")
+let base = Date()
+let fresh = updatedLabel(base.addingTimeInterval(-30), pollInterval: 60, now: base)
+check("fresh is not stale", fresh?.stale == false)
+let old = updatedLabel(base.addingTimeInterval(-300), pollInterval: 60, now: base)
+check("5m old at 60s poll is stale", old?.stale == true)
+check("stale shows relative minutes", old?.text == "Updated 5m ago")
+check("nil date → no label", updatedLabel(nil, pollInterval: 60, now: base) == nil)
+let hours = updatedLabel(base.addingTimeInterval(-7200), pollInterval: 60, now: base)
+check("2h old shows hours", hours?.text == "Updated 2h ago")
+
 print("== 9. Review-fix regressions ==")
 // 9a. Toggle must only flip the LEADING marker, never one inside task text.
 let tricky = "- [x] rename - [ ] placeholders in docs"

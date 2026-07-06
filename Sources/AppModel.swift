@@ -14,6 +14,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var notes: NotesData = NotesStore.load()
     @Published private(set) var convos: [String: [Convo]] = [:]
     @Published private(set) var ccSessions: [CCSession] = []
+    /// True while a user-initiated refresh is in flight (drives the spinner).
+    @Published private(set) var isRefreshing = false
 
     private let defaultsKey = "accounts_v1"
     private var pollTimer: Timer?
@@ -160,6 +162,16 @@ final class AppModel: ObservableObject {
         Task { await refresh(accounts[idx]) }
     }
 
+    /// Swap two accounts' positions in the persisted order. Callers compute the
+    /// pair from the VISIBLE order so reordering matches what the user sees
+    /// (the raw array is display-transformed by flag-pinning in sortedAccounts).
+    func swapAccounts(_ id1: String, _ id2: String) {
+        guard let a = accounts.firstIndex(where: { $0.id == id1 }),
+              let b = accounts.firstIndex(where: { $0.id == id2 }) else { return }
+        accounts.swapAt(a, b)
+        persist()
+    }
+
     func removeAccount(_ account: Account) {
         fetchEpoch[account.id, default: 0] += 1   // in-flight fetches must not resurrect it
         Keychain.delete(account: account.id)
@@ -236,11 +248,15 @@ final class AppModel: ObservableObject {
     }
 
     /// User-initiated refresh: bypass the conversations' lazy 5-minute window
-    /// so the button actually refreshes everything visible.
+    /// so the button actually refreshes everything visible. Guards against
+    /// stacking concurrent refreshes and drives the header spinner.
     func userRefresh() async {
+        guard !isRefreshing else { return }
+        isRefreshing = true
         convoFetchedAt.removeAll()
         await refreshAll()
         refreshClaudeCode()
+        isRefreshing = false
     }
 
     /// Rebuild Claude Code sessions from hook events (empty unless the user

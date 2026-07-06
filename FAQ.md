@@ -53,6 +53,14 @@ Turn it off in Preferences. (Configurable combos are on the roadmap.)
 Both read the same source; the dashboard polls on an interval (default 1 min),
 so brief divergence right after heavy usage is expected. Hit refresh to sync.
 
+**How do I finish editing a note?**
+Click anywhere outside it, press Esc, or press ⌘⏎ (or the Done button). Notes
+save automatically either way — there's no separate save step.
+
+**Removing an account asks for confirmation now.**
+Yes — because it also deletes that account's stored session key and any note
+you wrote for it, and that can't be undone.
+
 **Where are my notes stored? Do they sync?**
 `~/Library/Application Support/Claude Dash/notes.json` — plain JSON on this
 Mac only. No cloud, no sync, nothing sent anywhere. Back the file up (or sync

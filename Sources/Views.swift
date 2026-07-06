@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 // MARK: - Density scale (popover = 1.0; board window = user preference)
 
@@ -14,6 +15,55 @@ extension EnvironmentValues {
 
 func usageColor(_ pct: Double) -> Color {
     pct >= 90 ? .red : pct >= 75 ? .orange : .green
+}
+
+/// Container-surface opacity that steps up under Increase Contrast.
+func surfaceOpacity(_ base: Double, _ contrast: ColorSchemeContrast) -> Double {
+    contrast == .increased ? min(base * 2.4, 0.22) : base
+}
+
+/// Move Up/Down action for a card. Reorders relative to the VISIBLE order and
+/// only within the same flag group — flagged accounts are pinned on top, so a
+/// cross-boundary move would be a confusing no-op. Returns nil when not shown.
+@MainActor
+func moveClosure(_ a: Account, in visible: [Account], by offset: Int,
+                 model: AppModel) -> (() -> Void)? {
+    guard Prefs.sortMode == .manual,
+          let vIdx = visible.firstIndex(where: { $0.id == a.id }) else { return nil }
+    let target = vIdx + offset
+    guard visible.indices.contains(target),
+          model.isFlagged(a.id) == model.isFlagged(visible[target].id) else { return nil }
+    let otherId = visible[target].id
+    return { model.swapAccounts(a.id, otherId) }
+}
+
+/// A subtle hover wash + pointing cursor for otherwise-unstyled click targets.
+struct HoverHighlight: ViewModifier {
+    @State private var hovering = false
+    func body(content: Content) -> some View {
+        content
+            .background(RoundedRectangle(cornerRadius: 4)
+                .fill(Color.primary.opacity(hovering ? 0.06 : 0)))
+            .onHover { h in
+                hovering = h
+                if h { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+            }
+    }
+}
+
+extension View {
+    func hoverHighlight() -> some View { modifier(HoverHighlight()) }
+
+    /// Clicks in empty window space end any in-progress note edit (macOS only
+    /// moves keyboard focus on control clicks, so we resign first responder
+    /// explicitly). The TextEditor's focus-loss handler then commits the note.
+    func endEditingOnBackgroundTap() -> some View {
+        background(
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { NSApp.keyWindow?.makeFirstResponder(nil) }
+        )
+    }
 }
 
 func resetString(_ date: Date?) -> String {
@@ -33,14 +83,17 @@ struct UsageBar: View {
     var pct: Double
     var height: CGFloat = 7
     @Environment(\.dashScale) private var s
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: height * s / 2)
-                    .fill(Color.primary.opacity(0.12))
+                    .fill(Color.primary.opacity(surfaceOpacity(0.12, contrast)))
                 RoundedRectangle(cornerRadius: height * s / 2)
                     .fill(usageColor(pct))
                     .frame(width: max(0, min(1, pct / 100)) * geo.size.width)
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: pct)
             }
         }
         .frame(height: height * s)
@@ -86,6 +139,7 @@ struct NoteView: View {
     var onCommit: () -> Void = {}   // fired when an edit session ends → flush to disk
 
     @Environment(\.dashScale) private var s
+    @Environment(\.colorSchemeContrast) private var contrast
     @State private var editing = false
     @FocusState private var focused: Bool
 
@@ -99,6 +153,7 @@ struct NoteView: View {
                         .frame(minHeight: 52 * s, maxHeight: 160 * s)
                         .focused($focused)
                         .onChange(of: focused) { if !$0 { finishEditing() } }
+                        .onExitCommand { finishEditing() }   // Esc commits the note
                     HStack(spacing: 6) {
                         Text("Saves automatically · “- [ ] task” becomes a checkbox")
                             .font(.system(size: 9 * s)).foregroundStyle(.tertiary)
@@ -107,19 +162,25 @@ struct NoteView: View {
                         Button("Done") { finishEditing() }
                             .controlSize(.small)
                             .keyboardShortcut(.return, modifiers: .command)
-                            .help("Finish editing (⌘⏎). Notes also save when you click away.")
+                            .help("Finish editing (⌘⏎ or Esc). Notes also save when you click away.")
                     }
                 }
             } else if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 HStack(spacing: 5) {
                     Image(systemName: "square.and.pencil")
-                        .font(.system(size: 10 * s)).foregroundStyle(.tertiary)
+                        .font(.system(size: 10 * s)).foregroundStyle(.secondary)
                     Text(placeholder)
                         .font(.system(size: 11 * s)).foregroundStyle(.tertiary)
+                    Spacer(minLength: 0)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
-                .onTapGesture { editing = true; focused = true }
+                .onTapGesture(perform: startEditing)
+                .hoverHighlight()
+                .accessibilityAddTraits(.isButton)
+                .accessibilityLabel(placeholder)
+                .accessibilityHint("Edit note")
+                .accessibilityAction(.default, startEditing)
             } else {
                 VStack(alignment: .leading, spacing: 2 * s) {
                     ForEach(Array(NoteParser.lines(text).enumerated()), id: \.offset) { idx, line in
@@ -128,12 +189,16 @@ struct NoteView: View {
                             HStack(alignment: .firstTextBaseline, spacing: 5) {
                                 Button {
                                     onChange(NoteParser.toggle(text, line: idx))
+                                    onCommit()
                                 } label: {
                                     Image(systemName: done ? "checkmark.square.fill" : "square")
                                         .font(.system(size: 11 * s))
                                         .foregroundStyle(done ? Color.accentColor : .secondary)
                                 }
                                 .buttonStyle(.plain)
+                                .help(done ? "Mark as not done" : "Mark as done")
+                                .accessibilityLabel(body)
+                                .accessibilityValue(done ? "checked" : "unchecked")
                                 Text(body)
                                     .font(.system(size: 11 * s))
                                     .strikethrough(done)
@@ -146,17 +211,29 @@ struct NoteView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
-                .onTapGesture { editing = true; focused = true }
+                .onTapGesture(perform: startEditing)
                 .overlay(alignment: .topTrailing) {
                     Image(systemName: "square.and.pencil")
-                        .font(.system(size: 9 * s)).foregroundStyle(.quaternary)
+                        .font(.system(size: 9 * s))
+                        .foregroundStyle(contrast == .increased ? .secondary : .tertiary)
+                        .accessibilityHidden(true)
                 }
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint("Edit note")
+                .accessibilityAction(.default, startEditing)
             }
         }
         .padding(6 * s)
-        .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.05)))
+        .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(surfaceOpacity(0.05, contrast))))
+        .overlay {
+            if editing {
+                RoundedRectangle(cornerRadius: 5).strokeBorder(Color.accentColor.opacity(0.7), lineWidth: 1.5)
+            }
+        }
         .help("Click to edit. Lines like “- [ ] task” become checkboxes. Saves automatically.")
     }
+
+    private func startEditing() { editing = true; focused = true }
 
     private func finishEditing() {
         editing = false
@@ -185,8 +262,10 @@ struct ConvoList: View {
                             Text(relative(d)).font(.system(size: 9 * s)).foregroundStyle(.secondary)
                         }
                     }
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .hoverHighlight()
                 .help("Open this conversation in the account's browser profile")
             }
         }
@@ -203,11 +282,69 @@ struct ConvoList: View {
 
 // MARK: - Dashboard panel
 
+/// Shared "no accounts yet" guidance (popover + board window).
+struct EmptyAccountsView: View {
+    var onAdd: () -> Void
+    @Environment(\.dashScale) private var s
+    var body: some View {
+        VStack(spacing: 10 * s) {
+            Image(systemName: "gauge.with.dots.needle.33percent")
+                .font(.system(size: 30 * s)).foregroundStyle(.secondary)
+            Text("No accounts yet").font(.system(size: 13 * s, weight: .medium))
+            Text("Add a Claude account to see its usage and jump into the right browser profile.")
+                .font(.system(size: 11 * s)).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Add account…", action: onAdd).controlSize(.large)
+        }
+        .padding(24 * s)
+        .frame(maxWidth: .infinity)
+    }
+}
+
+/// Footer "Updated …" line, orange with a wifi-slash icon once stale.
+struct UpdatedFooterText: View {
+    var lastRefresh: Date?
+    var tick: Int   // dependency so it recomputes on the minute pulse
+    var body: some View {
+        if let info = updatedLabel(lastRefresh, pollInterval: Prefs.pollInterval) {
+            HStack(spacing: 3) {
+                if info.stale {
+                    Image(systemName: "wifi.slash").font(.system(size: 9))
+                }
+                Text(info.stale ? "\(info.text) — retrying" : info.text)
+                    .font(.system(size: 10))
+            }
+            .foregroundStyle(info.stale ? Color.orange : Color.secondary)
+        }
+    }
+}
+
+/// Refresh button that shows a spinner and disables itself while in flight.
+struct RefreshButton: View {
+    @ObservedObject var model: AppModel
+    var body: some View {
+        Group {
+            if model.isRefreshing {
+                ProgressView().controlSize(.small)
+            } else {
+                Button(action: { Task { await model.userRefresh() } }) {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                .help("Refresh all")
+            }
+        }
+        .frame(width: 20)
+    }
+}
+
 struct DashboardView: View {
     @ObservedObject var model: AppModel
     var onAdd: () -> Void
     var onEdit: (Account) -> Void
     var onPrefs: () -> Void
+    var onRemove: (Account) -> Void = { _ in }
     var onOpenBoard: () -> Void = {}
 
     var body: some View {
@@ -215,13 +352,14 @@ struct DashboardView: View {
             header
             Divider()
             if model.accounts.isEmpty {
-                emptyState
+                EmptyAccountsView(onAdd: onAdd)
             } else {
                 ScrollView {
                     VStack(spacing: 0) {
                         globalNote
                         Divider()
-                        ForEach(model.sortedAccounts) { account in
+                        let visible = model.sortedAccounts
+                        ForEach(visible) { account in
                             AccountRow(
                                 account: account,
                                 state: model.usage[account.id] ?? .unknown,
@@ -232,10 +370,12 @@ struct DashboardView: View {
                                 openUsage: { model.openChrome(account, path: "/settings/usage") },
                                 openConvo: { model.openChrome(account, path: "/chat/\($0.uuid)") },
                                 edit: { onEdit(account) },
-                                remove: { model.removeAccount(account) },
+                                remove: { onRemove(account) },
                                 toggleFlag: { model.toggleFlag(accountId: account.id) },
                                 noteChanged: { model.setNote(accountId: account.id, text: $0) },
-                                noteCommitted: { model.flushNotesNow() }
+                                noteCommitted: { model.flushNotesNow() },
+                                moveUp: moveClosure(account, in: visible, by: -1, model: model),
+                                moveDown: moveClosure(account, in: visible, by: 1, model: model)
                             )
                             Divider()
                         }
@@ -245,12 +385,14 @@ struct DashboardView: View {
                         }
                     }
                 }
+                .endEditingOnBackgroundTap()
             }
             footer
         }
         .frame(width: 340)
         .frame(maxHeight: 560)
     }
+
 
     private var header: some View {
         HStack {
@@ -261,12 +403,8 @@ struct DashboardView: View {
                 .help("Open as a window — bigger text, resizable, notes side by side (⌃⌥⌘D)")
             Button(action: onPrefs) { Image(systemName: "gearshape") }
                 .buttonStyle(.borderless)
-                .help("Preferences")
-            Button(action: { Task { await model.userRefresh() } }) {
-                Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(.borderless)
-            .help("Refresh all")
+                .help("Settings")
+            RefreshButton(model: model)
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
     }
@@ -279,31 +417,13 @@ struct DashboardView: View {
             .padding(.horizontal, 12).padding(.vertical, 8)
     }
 
-    private var emptyState: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "gauge.with.dots.needle.33percent")
-                .font(.system(size: 30)).foregroundStyle(.secondary)
-            Text("No accounts yet").font(.system(size: 13, weight: .medium))
-            Text("Add a Claude account to see its usage and jump into the right browser profile.")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-            Button("Add account…", action: onAdd)
-                .controlSize(.small)
-        }
-        .padding(20)
-    }
-
     private var footer: some View {
         VStack(spacing: 0) {
             Divider()
             HStack {
                 Button("Add account…", action: onAdd).buttonStyle(.borderless)
                 Spacer()
-                if let d = model.lastRefresh {
-                    Text("Updated \(d.formatted(date: .omitted, time: .shortened))")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                }
+                UpdatedFooterText(lastRefresh: model.lastRefresh, tick: model.displayTick)
             }
             .padding(.horizontal, 12).padding(.vertical, 7)
         }
@@ -324,6 +444,8 @@ struct AccountRow: View {
     var toggleFlag: () -> Void = {}
     var noteChanged: (String) -> Void = { _ in }
     var noteCommitted: () -> Void = {}
+    var moveUp: (() -> Void)? = nil     // shown only in manual sort mode
+    var moveDown: (() -> Void)? = nil
     @Environment(\.dashScale) private var s
 
     var body: some View {
@@ -356,11 +478,7 @@ struct AccountRow: View {
                 .controlSize(.small)
                 .help("Open claude.ai in \(account.chromeProfileLabel)")
                 Menu {
-                    Button(flagged ? "Clear attention flag" : "Flag for attention", action: toggleFlag)
-                    Button("Edit…", action: edit)
-                    Button("Open usage page", action: openUsage)
-                    Divider()
-                    Button("Remove account", role: .destructive, action: remove)
+                    rowMenuItems
                 } label: {
                     Image(systemName: "ellipsis")
                 }
@@ -375,16 +493,33 @@ struct AccountRow: View {
         .overlay(alignment: .leading) {
             if flagged { Rectangle().fill(Color.orange).frame(width: 2) }
         }
-        .contextMenu {
-            Button("Open claude.ai", action: open)
-            Button("Open usage page", action: openUsage)
-            Button(flagged ? "Clear attention flag" : "Flag for attention", action: toggleFlag)
-            Button("Edit…", action: edit)
-            Divider()
-            Button("Remove account", role: .destructive, action: remove)
-        }
+        .contextMenu { rowMenuItems }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Account \(account.displayName)\(flagged ? ", flagged for attention" : "")")
+        .accessibilityLabel("Account \(account.displayName), \(healthDescription)\(flagged ? ", flagged for attention" : "")")
+    }
+
+    @ViewBuilder private var rowMenuItems: some View {
+        Button("Open claude.ai", action: open)
+        Button("Open usage page", action: openUsage)
+        Button(flagged ? "Clear attention flag" : "Flag for attention", action: toggleFlag)
+        Button("Edit…", action: edit)
+        if moveUp != nil || moveDown != nil {
+            Divider()
+            if let moveUp { Button("Move Up", action: moveUp) }
+            if let moveDown { Button("Move Down", action: moveDown) }
+        }
+        Divider()
+        Button("Remove account", role: .destructive, action: remove)
+    }
+
+    private var healthDescription: String {
+        switch state {
+        case .ok(let u): return "session \(Int(u.session?.utilization ?? 0)) percent used"
+        case .unauthorized: return "session key expired"
+        case .rateLimited: return "rate limited"
+        case .error: return "unavailable"
+        case .loading, .unknown: return "loading"
+        }
     }
 
     @ViewBuilder private var content: some View {
@@ -442,9 +577,16 @@ struct AccountRow: View {
         switch state {
         case .ok(let u):
             let five = u.session?.utilization ?? 0
-            Circle().fill(usageColor(five)).frame(width: 7 * s, height: 7 * s)
+            // Shape doubles the meaning at high usage so it isn't color-only.
+            if five >= 90 {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .font(.system(size: 9 * s)).foregroundStyle(.red)
+            } else {
+                Circle().fill(usageColor(five)).frame(width: 7 * s, height: 7 * s)
+            }
         case .unauthorized:
-            Circle().fill(Color.red).frame(width: 7 * s, height: 7 * s)
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 9 * s)).foregroundStyle(.red)
         default:
             EmptyView()
         }
@@ -549,7 +691,10 @@ struct MenuBarGaugesView: View {
                 let pct = u.session?.utilization ?? 0
                 miniBar(pct)
             case .unauthorized:
-                Rectangle().fill(Color.red).frame(width: 15, height: 3).cornerRadius(1.5)
+                // Distinct from a 100%-full red bar so an expired key can't be
+                // mistaken for maxed-out usage.
+                Image(systemName: "exclamationmark").font(.system(size: 7, weight: .bold))
+                    .foregroundStyle(.red).frame(height: 3)
             default:
                 Rectangle().fill(Color.secondary.opacity(0.4)).frame(width: 15, height: 3).cornerRadius(1.5)
             }
@@ -624,10 +769,16 @@ struct AddAccountView: View {
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     Text("\(BrowserDetect.current().appName) profile").font(.system(size: 11, weight: .medium))
-                    Picker("", selection: $selectedProfile) {
-                        Text("Choose…").tag(Optional<ChromeProfile>.none)
-                        ForEach(profiles) { p in Text(p.label).tag(Optional(p)) }
-                    }.labelsHidden()
+                    if profiles.isEmpty {
+                        Text("No \(BrowserDetect.current().appName) profiles found. Claude Dash opens each account in its own browser profile — install/sign into Chrome, Brave, or Edge, or set a browser override (see the README).")
+                            .font(.system(size: 10)).foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Picker("", selection: $selectedProfile) {
+                            Text("Choose…").tag(Optional<ChromeProfile>.none)
+                            ForEach(profiles) { p in Text(p.label).tag(Optional(p)) }
+                        }.labelsHidden()
+                    }
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Display name").font(.system(size: 11, weight: .medium))
@@ -637,7 +788,7 @@ struct AddAccountView: View {
             }
 
             HStack {
-                Button("Cancel", action: onDone)
+                Button("Cancel", action: onDone).keyboardShortcut(.cancelAction)
                 Spacer()
                 if orgs.isEmpty {
                     Button(validating ? "Validating…" : "Validate key", action: validate)
@@ -709,6 +860,7 @@ struct EditAccountView: View {
     @ObservedObject var model: AppModel
     var account: Account
     var onDone: () -> Void
+    var onRemove: (Account) -> Void = { _ in }
 
     @State private var displayName: String
     @State private var profiles: [ChromeProfile] = ChromeProfiles.all()
@@ -717,10 +869,12 @@ struct EditAccountView: View {
     @State private var saving = false
     @State private var errorText: String?
 
-    init(model: AppModel, account: Account, onDone: @escaping () -> Void) {
+    init(model: AppModel, account: Account, onDone: @escaping () -> Void,
+         onRemove: @escaping (Account) -> Void = { _ in }) {
         self.model = model
         self.account = account
         self.onDone = onDone
+        self.onRemove = onRemove
         _displayName = State(initialValue: account.displayName)
         let all = ChromeProfiles.all()
         _profiles = State(initialValue: all)
@@ -741,9 +895,15 @@ struct EditAccountView: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("\(BrowserDetect.current().appName) profile").font(.system(size: 11, weight: .medium))
-                Picker("", selection: $selectedProfile) {
-                    ForEach(profiles) { p in Text(p.label).tag(Optional(p)) }
-                }.labelsHidden()
+                if profiles.isEmpty {
+                    Text("No \(BrowserDetect.current().appName) profiles found — install/sign into a Chromium browser or set a browser override (see the README).")
+                        .font(.system(size: 10)).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Picker("", selection: $selectedProfile) {
+                        ForEach(profiles) { p in Text(p.label).tag(Optional(p)) }
+                    }.labelsHidden()
+                }
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -764,12 +924,9 @@ struct EditAccountView: View {
             }
 
             HStack {
-                Button(role: .destructive) {
-                    model.removeAccount(account)
-                    onDone()
-                } label: { Text("Remove account") }
+                Button(role: .destructive) { onRemove(account) } label: { Text("Remove account") }
                 Spacer()
-                Button("Cancel", action: onDone)
+                Button("Cancel", action: onDone).keyboardShortcut(.cancelAction)
                 Button(saving ? "Verifying…" : "Save", action: save)
                     .keyboardShortcut(.defaultAction)
                     .disabled(saving)
