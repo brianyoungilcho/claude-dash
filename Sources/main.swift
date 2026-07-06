@@ -140,6 +140,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.flushNotesNow()
     }
 
+    /// A Dock-icon click (or `open` on the already-running app) sends this.
+    /// As an LSUIElement/accessory app we own no default window, so without a
+    /// handler AppKit does nothing and the Dock icon looks dead. Surface the
+    /// board: if any window is already visible, just bring the app forward;
+    /// otherwise open (or deminiaturize) the board. We target the board, not the
+    /// popover panel, because the panel is anchored to the menu-bar status item —
+    /// which macOS may be hiding, leaving the panel with nowhere valid to appear.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if flag {
+            NSApp.activate(ignoringOtherApps: true)
+        } else {
+            openBoardWindow()
+        }
+        return true
+    }
+
     // MARK: Panel
 
     private func setupPanel() {
