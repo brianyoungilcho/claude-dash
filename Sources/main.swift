@@ -52,6 +52,14 @@ final class DashboardPanel: NSPanel {
     }
 }
 
+/// A titled panel (even with a hidden, transparent titlebar) reports its ~28pt
+/// titlebar as a top safe-area inset. NSHostingView honors that inset and lays
+/// the SwiftUI content out below it, leaving dead space above the popover's
+/// header. Zeroing the insets lets the content sit flush with the top edge.
+final class EdgeToEdgeHostingView<Content: View>: NSHostingView<Content> {
+    override var safeAreaInsets: NSEdgeInsets { NSEdgeInsets() }
+}
+
 // MARK: - Carbon hotkey trampoline (C callback can't capture context)
 
 private func hotKeyHandler(_ next: EventHandlerCallRef?, _ event: EventRef?,
@@ -170,7 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.openBoardWindow()
             }
         )
-        hostingView = NSHostingView(rootView: root)
+        hostingView = EdgeToEdgeHostingView(rootView: root)
         panel = DashboardPanel(content: hostingView)
         panel.onDismiss = { [weak self] in self?.hidePanel() }
     }
