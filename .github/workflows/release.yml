@@ -34,8 +34,8 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${TAP_TOKEN:-}" ]; then
-            echo "::error::HOMEBREW_TAP_TOKEN is not set — release published but the Homebrew tap was NOT bumped. Add the secret (see this workflow's comment)." >&2
-            exit 1
+            echo "::warning::HOMEBREW_TAP_TOKEN is not set — the GitHub release was published but the Homebrew tap was NOT bumped. Add the secret to enable auto-bump; until then bump the tap manually. Skipping (release itself succeeded)." >&2
+            exit 0
           fi
           VERSION="${GITHUB_REF_NAME#v}"
           SHA="$(shasum -a 256 "Claude-Dash-${VERSION}.zip" | awk '{print $1}')"
