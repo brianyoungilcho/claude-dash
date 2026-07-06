@@ -85,6 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKeyRef: EventHotKeyRef?
     private var hotKeyHandlerInstalled = false
     private var sigtermSource: DispatchSourceSignal?
+    private var statusWatchdog: Timer?
     /// AppKit closes all windows DURING terminate teardown (after
     /// applicationWillTerminate), which would run the board's willClose
     /// observer and falsely record "user closed the board."
@@ -134,6 +135,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
             object: nil, queue: .main
         ) { [weak self] _ in MainActor.assumeIsolated { self?.renderStatusImage() } }
+
+        // macOS 26 (Tahoe) can silently evict a long-lived status item after
+        // hours — the app stays healthy but the icon vanishes. Nothing re-adds it
+        // on its own, so poll for its window and rebuild when it's gone. First
+        // fire is +60s so the normal startup attach is never misread as eviction;
+        // the 60s cadence also rate-limits us so a rebuild can't thrash.
+        statusWatchdog = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.verifyStatusItem() }
+        }
+
+        // The poll timer doesn't fire while the Mac sleeps and only catches up on
+        // its next interval, so the bar shows stale data right after wake —
+        // refresh now. Status-item eviction also tends to surface after sleep, so
+        // re-check the item here too. (Workspace notifications post on their own
+        // center, not NotificationCenter.default.)
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.verifyStatusItem()
+                Task { await self.model.refreshAll() }
+                self.model.refreshClaudeCode()
+            }
+        }
 
         renderStatusImage()
     }
@@ -383,6 +409,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Rebuild the status item if macOS 26 has evicted it. A healthy long-lived
+    /// item keeps its `button.window`; that going nil is the reliable eviction
+    /// signal (`isVisible` can lie). Called by the watchdog timer and on wake.
+    private func verifyStatusItem() {
+        if statusItem != nil, statusItem.button?.window != nil { return }
+        if let existing = statusItem { NSStatusBar.system.removeStatusItem(existing) }
+        setupStatusItem()
+        renderStatusImage()
+        dlog("status item was evicted; re-added")
+    }
+
     @objc private func statusClicked(_ sender: NSStatusBarButton) {
         let event = NSApp.currentEvent
         let secondary = event?.type == .rightMouseUp
@@ -470,6 +507,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             statusItem.button?.imagePosition = .imageOnly
             statusItem.button?.title = ""
         } else {
+            // Clear any stale image + reset position, or a prior success's
+            // `.imageOnly` would suppress the text fallback and show nothing.
+            statusItem.button?.image = nil
+            statusItem.button?.imagePosition = .noImage
             statusItem.button?.title = "Dash"   // keep the text fallback if rendering failed
         }
         // The rasterized image carries no SwiftUI a11y labels — describe the

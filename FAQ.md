@@ -1,10 +1,13 @@
 # FAQ
 
 **The app is running but there's no icon in the menu bar.**
-Three usual causes: (1) On macOS 26+, menu-bar items need per-app permission —
-check **System Settings → Menu Bar** and make sure Claude Dash is allowed.
-(2) A crowded menu bar (especially on notched MacBooks) silently hides items
-that don't fit — quit something or ⌘-drag icons to make room. (3) In
+Three usual causes: (1) On a notched Mac running macOS 26, an older build's
+icon could get parked in the hidden area left of the notch and never drawn —
+**update to v1.5.3 or later**, which places it in a visible slot on first
+launch. If an icon is still hidden, ⌘-drag it to the right of the notch.
+(There is no per-app "menu bar" permission toggle in macOS 26; don't go looking
+for one.) (2) A crowded menu bar (especially on notched MacBooks) silently hides
+items that don't fit — quit something or ⌘-drag icons to make room. (3) In
 Preferences, "Menu bar shows: All accounts" grows with each account; switch to
 "Tightest account only" or "Icon only" if you track many.
 
