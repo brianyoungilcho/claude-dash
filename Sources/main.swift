@@ -352,7 +352,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: Status item
 
     private func setupStatusItem() {
+        // macOS 26 notched-menu-bar fix: a status item with no persisted
+        // position gets dropped into the left-of-notch overflow region and is
+        // NEVER drawn — the app runs fine but the icon is invisible. Seed a
+        // right-of-notch slot (only if we've never recorded one) BEFORE giving
+        // the item its autosave name, so macOS restores a visible position on
+        // first launch. The moment the user drags the icon, macOS overwrites
+        // this key, so we never fight a manual placement. Verified live on
+        // macOS 26.5.1: without this the item sits at x≈632 (hidden); with it,
+        // x≈975 (visible, clickable).
+        let posKey = "NSStatusItem Preferred Position ClaudeDashStatusItem"
+        if UserDefaults.standard.object(forKey: posKey) == nil {
+            UserDefaults.standard.set(450.0, forKey: posKey)
+        }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem.autosaveName = "ClaudeDashStatusItem"
         statusItem.button?.title = "Dash"   // guaranteed-visible fallback until the image renders
         if let button = statusItem.button {
             button.target = self
