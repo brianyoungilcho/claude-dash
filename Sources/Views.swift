@@ -242,44 +242,6 @@ struct NoteView: View {
     }
 }
 
-// MARK: - Recent conversations (signals layer)
-
-struct ConvoList: View {
-    var convos: [Convo]
-    var open: (Convo) -> Void
-    @Environment(\.dashScale) private var s
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2 * s) {
-            ForEach(convos.prefix(3)) { c in
-                Button { open(c) } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "bubble.left").font(.system(size: 8 * s))
-                            .foregroundStyle(.secondary)
-                        Text(c.name).font(.system(size: 10 * s)).lineLimit(1)
-                        Spacer(minLength: 4)
-                        if let d = c.updatedAt {
-                            Text(relative(d)).font(.system(size: 9 * s)).foregroundStyle(.secondary)
-                        }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .hoverHighlight()
-                .help("Open this conversation in the account's browser profile")
-            }
-        }
-    }
-
-    private func relative(_ d: Date) -> String {
-        let mins = Int(-d.timeIntervalSinceNow) / 60
-        if mins < 1 { return "now" }
-        if mins < 60 { return "\(mins)m" }
-        if mins < 1440 { return "\(mins / 60)h" }
-        return "\(mins / 1440)d"
-    }
-}
-
 // MARK: - Dashboard panel
 
 /// Shared "no accounts yet" guidance (popover + board window).
@@ -365,11 +327,9 @@ struct DashboardView: View {
                                 state: model.usage[account.id] ?? .unknown,
                                 noteText: model.notes.accounts[account.id]?.text ?? "",
                                 flagged: model.isFlagged(account.id),
-                                convos: Prefs.showConversations ? (model.convos[account.id] ?? []) : [],
                                 ccSessions: model.ccSessions(for: account.id),
                                 open: { model.openChrome(account, path: "/new") },
                                 openUsage: { model.openChrome(account, path: "/settings/usage") },
-                                openConvo: { model.openChrome(account, path: "/chat/\($0.uuid)") },
                                 edit: { onEdit(account) },
                                 remove: { onRemove(account) },
                                 toggleFlag: { model.toggleFlag(accountId: account.id) },
@@ -436,11 +396,9 @@ struct AccountRow: View {
     var state: UsageState
     var noteText: String = ""
     var flagged: Bool = false
-    var convos: [Convo] = []
     var ccSessions: [CCSession] = []   // Claude Code sessions owned by this account's org
     var open: () -> Void
     var openUsage: () -> Void
-    var openConvo: (Convo) -> Void = { _ in }
     var edit: () -> Void
     var remove: () -> Void
     var toggleFlag: () -> Void = {}
@@ -465,9 +423,6 @@ struct AccountRow: View {
                 content
                 if !ccSessions.isEmpty {
                     CCSessionLines(sessions: ccSessions)
-                }
-                if !convos.isEmpty {
-                    ConvoList(convos: convos, open: openConvo)
                 }
                 NoteView(text: noteText,
                          placeholder: "What am I working on here…",
@@ -1023,7 +978,6 @@ struct PreferencesView: View {
     @State private var menuBarMode = Prefs.menuBarMode
     @State private var hotkeyEnabled = Prefs.hotkeyEnabled
     @State private var launchAtLogin = false
-    @State private var showConversations = Prefs.showConversations
     @State private var boardFloats = Prefs.boardFloats
     @State private var boardTextScale = Prefs.boardTextScale
     @State private var hooksInstalled = ClaudeCodeMonitor.hooksInstalled()
@@ -1047,7 +1001,6 @@ struct PreferencesView: View {
                 Toggle("Show remaining % instead of used %", isOn: $showRemaining)
             }
             Section {
-                Toggle("Show recent conversations per account", isOn: $showConversations)
                 Toggle("Board window stays on top", isOn: $boardFloats)
                 Picker("Board text size", selection: $boardTextScale) {
                     Text("Standard").tag(1.0)
@@ -1106,10 +1059,6 @@ struct PreferencesView: View {
         .onChange(of: menuBarMode) { v in Prefs.menuBarMode = v; model.objectWillChange.send() }
         .onChange(of: hotkeyEnabled) { v in Prefs.hotkeyEnabled = v; model.objectWillChange.send() }
         .onChange(of: launchAtLogin) { v in onLoginItemToggle(v) }
-        .onChange(of: showConversations) { v in
-            Prefs.showConversations = v
-            if v { Task { await model.userRefresh() } } else { model.objectWillChange.send() }
-        }
         .onChange(of: boardFloats) { v in Prefs.boardFloats = v; model.objectWillChange.send() }
         .onChange(of: boardTextScale) { v in Prefs.boardTextScale = v; model.objectWillChange.send() }
     }

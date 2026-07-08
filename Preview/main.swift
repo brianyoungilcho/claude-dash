@@ -57,12 +57,7 @@ MainActor.assumeIsolated {
         .background(Color(white: 0.12)), "\(out)/menubar-empty.png", scale: 4)
 
     // The dashboard panel body (header + rows), light + dark — board flavor
-    // with notes, conversations, flags, and the Claude Code section.
-    let sampleConvos: [String: [Convo]] = [
-        "a": [Convo(uuid: "1", name: "Draft the launch email", updatedAt: now.addingTimeInterval(-540), model: nil),
-              Convo(uuid: "2", name: "Debug webhook retries", updatedAt: now.addingTimeInterval(-7200), model: nil)],
-        "b": [Convo(uuid: "3", name: "Q3 roadmap review", updatedAt: now.addingTimeInterval(-300), model: nil)],
-    ]
+    // with notes, flags, and the Claude Code section.
     let sampleNotes: [String: (String, Bool)] = [
         "a": ("- [x] ship v1.2\n- [ ] write release notes", false),
         "b": ("Waiting on legal review before publishing.", true),
@@ -92,9 +87,8 @@ MainActor.assumeIsolated {
                 AccountRow(account: acct, state: usage[acct.id] ?? .unknown,
                            noteText: sampleNotes[acct.id]?.0 ?? "",
                            flagged: sampleNotes[acct.id]?.1 ?? false,
-                           convos: sampleConvos[acct.id] ?? [],
                            ccSessions: acct.id == "a" ? ccSessions : [],
-                           open: {}, openUsage: {}, openConvo: { _ in },
+                           open: {}, openUsage: {},
                            edit: {}, remove: {}, toggleFlag: {}, noteChanged: { _ in })
                 Divider()
             }
@@ -123,7 +117,7 @@ MainActor.assumeIsolated {
                          n.accounts["b"] = AccountNote(text: sampleNotes["b"]!.0, flagged: true)
                          return n
                      }(),
-                     convos: sampleConvos, ccSessions: [],
+                     ccSessions: [],
                      ccByAccount: ["a": ccSessions], lastRefresh: now,
                      embedInScrollView: false)
             .environment(\.dashScale, textScale)
