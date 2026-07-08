@@ -63,6 +63,14 @@ enum Prefs {
         set { d.set(newValue.rawValue, forKey: "menuBarMode") }
     }
 
+    /// Show the Codex usage card (reads ~/.codex session files locally; no
+    /// network, no keys). Defaults on — it stays invisible unless a Codex
+    /// install with usable data is actually present.
+    static var monitorCodex: Bool {
+        get { d.object(forKey: "monitorCodex") == nil ? true : d.bool(forKey: "monitorCodex") }
+        set { d.set(newValue, forKey: "monitorCodex") }
+    }
+
     /// Global hotkey (⌃⌥⌘D) toggles the board window.
     static var hotkeyEnabled: Bool {
         get { d.object(forKey: "hotkeyEnabled") == nil ? true : d.bool(forKey: "hotkeyEnabled") }

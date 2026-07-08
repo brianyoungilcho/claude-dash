@@ -313,7 +313,7 @@ struct DashboardView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            if model.accounts.isEmpty {
+            if model.accounts.isEmpty && model.codex == nil && model.ccUnmatchedSessions.isEmpty {
                 EmptyAccountsView(onAdd: onAdd)
             } else {
                 ScrollView {
@@ -338,6 +338,10 @@ struct DashboardView: View {
                                 moveUp: moveClosure(account, in: visible, by: -1, model: model),
                                 moveDown: moveClosure(account, in: visible, by: 1, model: model)
                             )
+                            Divider()
+                        }
+                        if let codex = model.codex {
+                            CodexSection(usage: codex, tick: model.displayTick)
                             Divider()
                         }
                         if !model.ccUnmatchedSessions.isEmpty {
@@ -624,6 +628,72 @@ struct ClaudeCodeSection: View {
         if mins < 1 { return "active now" }
         if mins < 60 { return "\(mins)m ago" }
         return "\(mins / 60)h ago"
+    }
+}
+
+// MARK: - Codex usage (local read from ~/.codex; nothing leaves the machine)
+
+/// The Codex account's rate-limit window(s) as at-a-glance gauges, mirroring the
+/// per-account Claude metrics. Reuses `MetricLine`; the "as of" age is honest
+/// about this being a last-known local snapshot (Codex only writes it on a turn).
+struct CodexSection: View {
+    var usage: CodexUsage
+    var tick: Int = 0   // recompute the "as of" age on the minute pulse
+    @Environment(\.dashScale) private var s
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5 * s) {
+            HStack(spacing: 6 * s) {
+                Text("CODEX")
+                    .font(.system(size: 9 * s, weight: .semibold)).foregroundStyle(.secondary)
+                if let plan = usage.planType, !plan.isEmpty {
+                    Text(plan.uppercased())
+                        .font(.system(size: 8 * s, weight: .semibold))
+                        .padding(.horizontal, 4 * s).padding(.vertical, 1 * s)
+                        .background(Capsule().fill(Color.primary.opacity(0.1)))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if stale {
+                    Image(systemName: "clock.badge.exclamationmark")
+                        .font(.system(size: 8 * s)).foregroundStyle(.orange)
+                        .accessibilityHidden(true)
+                }
+                Text(agoText)
+                    .font(.system(size: 8 * s))
+                    .foregroundStyle(stale ? Color.orange : .secondary)
+            }
+            if let email = usage.accountEmail, !email.isEmpty {
+                Text(email).font(.system(size: 10 * s)).foregroundStyle(.secondary).lineLimit(1)
+            }
+            // trailing: recomputes resetString each minute pulse (via `tick`) so
+            // the countdown keeps ticking while Codex is idle and the snapshot,
+            // hence the metric, is unchanged.
+            ForEach(Array(usage.windows.enumerated()), id: \.offset) { _, window in
+                MetricLine(label: window.label, metric: window.metric,
+                           trailing: resetString(window.metric.resetsAt))
+            }
+        }
+        .padding(.horizontal, 12 * s).padding(.vertical, 9 * s)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Codex usage" + (usage.accountEmail.map { ", \($0)" } ?? "")
+                            + (stale ? ", reading may be out of date" : ""))
+    }
+
+    /// A stale reading: the snapshot is over an hour old, or a window's own
+    /// countdown has already elapsed (so the shown percent predates a reset).
+    private var stale: Bool {
+        -usage.snapshotAt.timeIntervalSinceNow > 3600
+            || usage.windows.contains { $0.metric.resetsAt.map { $0 <= Date() } ?? false }
+    }
+
+    private var agoText: String {
+        let mins = Int(-usage.snapshotAt.timeIntervalSinceNow) / 60
+        if mins < 1 { return "just now" }
+        if mins < 60 { return "as of \(mins)m ago" }
+        let hrs = mins / 60
+        if hrs < 24 { return "as of \(hrs)h ago" }
+        return "as of \(hrs / 24)d ago"
     }
 }
 
@@ -982,6 +1052,7 @@ struct PreferencesView: View {
     @State private var boardTextScale = Prefs.boardTextScale
     @State private var hooksInstalled = ClaudeCodeMonitor.hooksInstalled()
     @State private var hooksError: String?
+    @State private var monitorCodex = Prefs.monitorCodex
 
     var body: some View {
         Form {
@@ -1029,6 +1100,8 @@ struct PreferencesView: View {
                 if let hooksError {
                     Text(hooksError).font(.system(size: 10)).foregroundStyle(.red)
                 }
+                Toggle("Show Codex usage (reads ~/.codex locally — no keys, no network)",
+                       isOn: $monitorCodex)
             }
             Section {
                 Picker("Notify at", selection: $notifyThreshold) {
@@ -1059,6 +1132,7 @@ struct PreferencesView: View {
         .onChange(of: menuBarMode) { v in Prefs.menuBarMode = v; model.objectWillChange.send() }
         .onChange(of: hotkeyEnabled) { v in Prefs.hotkeyEnabled = v; model.objectWillChange.send() }
         .onChange(of: launchAtLogin) { v in onLoginItemToggle(v) }
+        .onChange(of: monitorCodex) { v in Prefs.monitorCodex = v; model.refreshCodex() }
         .onChange(of: boardFloats) { v in Prefs.boardFloats = v; model.objectWillChange.send() }
         .onChange(of: boardTextScale) { v in Prefs.boardTextScale = v; model.objectWillChange.send() }
     }

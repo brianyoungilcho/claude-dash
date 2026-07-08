@@ -11,6 +11,7 @@ struct BoardContent: View {
     var notes: NotesData
     var ccSessions: [CCSession]          // unmatched-only (standalone card)
     var ccByAccount: [String: [CCSession]] = [:]   // owner account id → sessions
+    var codex: CodexUsage? = nil         // local Codex usage card (nil = hidden)
     var lastRefresh: Date?
     var displayTick: Int = 0
     var isRefreshing = false
@@ -42,7 +43,7 @@ struct BoardContent: View {
             header
                 .padding(.horizontal, 16).padding(.vertical, 10)
             Divider()
-            if accounts.isEmpty {
+            if accounts.isEmpty && codex == nil && ccSessions.isEmpty {
                 EmptyAccountsView(onAdd: onAdd)
                     .frame(maxHeight: .infinity)
             } else if embedInScrollView {
@@ -80,6 +81,9 @@ struct BoardContent: View {
                             moveDown: moveDown(account)
                         )
                     }
+                }
+                if let codex {
+                    card { CodexSection(usage: codex, tick: displayTick) }
                 }
                 if !ccSessions.isEmpty {
                     card { ClaudeCodeSection(sessions: ccSessions) }
@@ -126,6 +130,7 @@ struct BoardView: View {
             notes: model.notes,
             ccSessions: model.ccUnmatchedSessions,
             ccByAccount: model.ccOwnerAccountId.map { [$0: model.ccSessions] } ?? [:],
+            codex: model.codex,
             lastRefresh: model.lastRefresh,
             displayTick: model.displayTick,
             isRefreshing: model.isRefreshing,

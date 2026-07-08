@@ -68,6 +68,12 @@ MainActor.assumeIsolated {
         CCSession(projectDisplay: "webapp", projectDir: "-u-webapp",
                   lastActivity: now.addingTimeInterval(-360), waiting: true),
     ]
+    let codexSample = CodexUsage(
+        windows: [CodexWindow(label: "monthly",
+                              metric: UsageMetric(utilization: 57, resetsAt: now.addingTimeInterval(25 * 86400)))],
+        planType: "team",
+        accountEmail: "you@example.com",
+        snapshotAt: now.addingTimeInterval(-240))
 
     func panel(_ scheme: ColorScheme) -> some View {
         VStack(spacing: 0) {
@@ -92,6 +98,8 @@ MainActor.assumeIsolated {
                            edit: {}, remove: {}, toggleFlag: {}, noteChanged: { _ in })
                 Divider()
             }
+            CodexSection(usage: codexSample)
+            Divider()
             HStack {
                 Text("Add account…").font(.system(size: 12)).foregroundStyle(.tint)
                 Spacer()
@@ -118,7 +126,7 @@ MainActor.assumeIsolated {
                          return n
                      }(),
                      ccSessions: [],
-                     ccByAccount: ["a": ccSessions], lastRefresh: now,
+                     ccByAccount: ["a": ccSessions], codex: codexSample, lastRefresh: now,
                      embedInScrollView: false)
             .environment(\.dashScale, textScale)
             .frame(width: width)
