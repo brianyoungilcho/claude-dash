@@ -21,5 +21,5 @@ jobs:
           done
       - name: Run tests
         run: |
-          swiftc -swift-version 5 -o .build/tests Tests/main.swift Sources/Core.swift Sources/Notes.swift Sources/ClaudeCode.swift
+          swiftc -swift-version 5 -o .build/tests Tests/main.swift Sources/Core.swift Sources/Notes.swift Sources/ClaudeCode.swift Sources/Codex.swift
           ./.build/tests

@@ -56,21 +56,22 @@ in the right browser profile.
 - **Tests**:
   ```bash
   mkdir -p .build
-  swiftc -swift-version 5 -o .build/tests Tests/main.swift Sources/Core.swift Sources/Notes.swift Sources/ClaudeCode.swift && ./.build/tests
+  swiftc -swift-version 5 -o .build/tests Tests/main.swift Sources/Core.swift Sources/Notes.swift Sources/ClaudeCode.swift Sources/Codex.swift && ./.build/tests
   ```
   The live-endpoint and browser-profile checks self-skip when `$CI` is set.
 - **View renders** (design review without launching the app):
   ```bash
   swiftc -swift-version 5 -o .build/preview Preview/main.swift \
     Sources/Core.swift Sources/AppModel.swift Sources/Views.swift \
-    Sources/Prefs.swift Sources/WebSignIn.swift Sources/Notes.swift Sources/ClaudeCode.swift Sources/Board.swift \
+    Sources/Prefs.swift Sources/WebSignIn.swift Sources/Notes.swift Sources/ClaudeCode.swift Sources/Codex.swift Sources/Board.swift \
     -framework AppKit -framework SwiftUI -framework WebKit -framework UserNotifications
   OUT=/tmp ./.build/preview
   ```
 - **Layout**: `Sources/Core.swift` (models, Keychain via `security` CLI,
   `UsageAPI`), `AppModel.swift` (state/polling), `Views.swift` (SwiftUI),
   `Prefs.swift` (settings), `WebSignIn.swift` (login window), `Board.swift`
-  (standalone board window), `main.swift`
+  (standalone board window), `Codex.swift` (local `~/.codex` usage read),
+  `main.swift`
   (panel, menu bar, hotkey). Tests and Preview each have their own
   `main.swift` — never compile them together with `Sources/main.swift`.
 

@@ -17,6 +17,8 @@ final class AppModel: ObservableObject {
     /// CLI's organizationUuid). Sessions render on that account's card; the
     /// standalone section only appears when no account matches.
     @Published private(set) var ccOwnerAccountId: String?
+    /// Local Codex usage snapshot (read from ~/.codex), nil when absent/disabled.
+    @Published private(set) var codex: CodexUsage?
     /// True while a user-initiated refresh is in flight (drives the spinner).
     @Published private(set) var isRefreshing = false
 
@@ -241,6 +243,7 @@ final class AppModel: ObservableObject {
         isRefreshing = true
         await refreshAll()
         refreshClaudeCode()
+        refreshCodex()
         isRefreshing = false
     }
 
@@ -258,6 +261,24 @@ final class AppModel: ObservableObject {
         let owner = matchCCOwner(loginOrgUuid: ClaudeCodeMonitor.currentLoginOrgUuid(),
                                  accounts: accounts)
         if owner != ccOwnerAccountId { ccOwnerAccountId = owner }
+    }
+
+    /// Rebuild the Codex usage snapshot from local session files. Pref-gated and
+    /// only when a Codex install is present, so a machine without Codex (or with
+    /// the card turned off) shows nothing. Codex rollout files are uncapped
+    /// (unlike the hook-rotated Claude Code file), so the read runs OFF the main
+    /// actor — same offloading the Keychain read uses in `refresh(_:)` — to keep
+    /// the popover/board smooth. The disable path stays synchronous so toggling
+    /// the pref off clears the card immediately.
+    func refreshCodex() {
+        guard Prefs.monitorCodex, CodexMonitor.isPresent() else {
+            if codex != nil { codex = nil }
+            return
+        }
+        Task {
+            let latest = await Task.detached { CodexMonitor.currentUsage() }.value
+            if latest != codex { codex = latest }
+        }
     }
 
     /// Sessions for a specific account card (only the CC owner gets them).
@@ -331,9 +352,11 @@ final class AppModel: ObservableObject {
             Task { @MainActor in
                 self.displayTick &+= 1
                 self.refreshClaudeCode()
+                self.refreshCodex()
             }
         }
         refreshClaudeCode()
+        refreshCodex()
     }
 
     /// Re-arm the poll timer after a preferences change.

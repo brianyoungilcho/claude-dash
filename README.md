@@ -185,12 +185,12 @@ Login Items**, if one remains.
 mkdir -p .build
 
 # run tests
-swiftc -swift-version 5 -o .build/tests Tests/main.swift Sources/Core.swift Sources/Notes.swift Sources/ClaudeCode.swift && ./.build/tests
+swiftc -swift-version 5 -o .build/tests Tests/main.swift Sources/Core.swift Sources/Notes.swift Sources/ClaudeCode.swift Sources/Codex.swift && ./.build/tests
 
 # render the views to PNGs (Preview has its own main.swift, so exclude Sources/main.swift)
 swiftc -swift-version 5 -o .build/preview Preview/main.swift \
   Sources/Core.swift Sources/AppModel.swift Sources/Views.swift \
-  Sources/Prefs.swift Sources/WebSignIn.swift Sources/Notes.swift Sources/ClaudeCode.swift Sources/Board.swift \
+  Sources/Prefs.swift Sources/WebSignIn.swift Sources/Notes.swift Sources/ClaudeCode.swift Sources/Codex.swift Sources/Board.swift \
   -framework AppKit -framework SwiftUI -framework WebKit -framework UserNotifications
 OUT=/tmp ./.build/preview
 ```

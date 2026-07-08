@@ -238,6 +238,117 @@ check("login org matches its account", matchCCOwner(loginOrgUuid: "org-bbb", acc
 check("unknown org matches nothing", matchCCOwner(loginOrgUuid: "org-zzz", accounts: ownerAccounts) == nil)
 check("nil login matches nothing", matchCCOwner(loginOrgUuid: nil, accounts: ownerAccounts) == nil)
 
+print("== 11. Codex: window-label buckets (±5% tolerance, matches the client) ==")
+check("300 → 5h", CodexMonitor.windowLabel(minutes: 300) == "5h")
+check("1440 → daily", CodexMonitor.windowLabel(minutes: 1440) == "daily")
+check("10080 → weekly", CodexMonitor.windowLabel(minutes: 10080) == "weekly")
+check("43200 → monthly", CodexMonitor.windowLabel(minutes: 43200) == "monthly")
+check("43800 (Team's ~30.4d) → monthly (in ±5% band)", CodexMonitor.windowLabel(minutes: 43800) == "monthly")
+check("525600 → annual", CodexMonitor.windowLabel(minutes: 525600) == "annual")
+check("odd value → usage", CodexMonitor.windowLabel(minutes: 999) == "usage")
+check("nil window → usage", CodexMonitor.windowLabel(minutes: nil) == "usage")
+
+print("== 11b. Codex: rate_limits → CodexUsage (Team single-monthly, verified shape) ==")
+let teamRL: [String: Any] = [
+    "limit_id": "codex",
+    "primary": ["used_percent": 57.0, "window_minutes": 43800, "resets_at": 1785681569],
+    "secondary": NSNull(),
+    "plan_type": "team",
+]
+if let u = CodexMonitor.usage(fromRateLimits: teamRL, snapshotAt: Date(), email: "brian@heybaro.com", jwtPlan: nil) {
+    check("one window (secondary null ignored)", u.windows.count == 1)
+    check("labeled monthly", u.windows.first?.label == "monthly")
+    check("utilization = 57", u.windows.first?.metric.utilization == 57)
+    check("resets_at decoded to the right instant",
+          u.windows.first?.metric.resetsAt == Date(timeIntervalSince1970: 1785681569))
+    check("plan from snapshot", u.planType == "team")
+    check("email carried through", u.accountEmail == "brian@heybaro.com")
+} else { check("team usage decoded", false) }
+
+print("== 11c. Codex: Plus-shape (5h primary + weekly secondary) ==")
+let plusRL: [String: Any] = [
+    "primary": ["used_percent": 20.0, "window_minutes": 300, "resets_at": 1785681569],
+    "secondary": ["used_percent": 8.0, "window_minutes": 10080, "resets_at": 1785881569],
+    "plan_type": "plus",
+]
+if let u = CodexMonitor.usage(fromRateLimits: plusRL, snapshotAt: Date(), email: nil, jwtPlan: nil) {
+    check("two windows", u.windows.count == 2)
+    check("labels 5h + weekly", u.windows.map(\.label) == ["5h", "weekly"])
+} else { check("plus usage decoded", false) }
+
+print("== 11d. Codex: reset fallbacks + plan/skip edge cases ==")
+let snap = Date()
+let relRL: [String: Any] = ["primary": ["used_percent": 10.0, "window_minutes": 300, "resets_in_seconds": 600]]
+if let u = CodexMonitor.usage(fromRateLimits: relRL, snapshotAt: snap, email: nil, jwtPlan: "pro") {
+    let reset = u.windows.first?.metric.resetsAt ?? .distantPast
+    check("resets_in_seconds is relative to the snapshot", abs(reset.timeIntervalSince(snap) - 600) < 1)
+    check("plan falls back to JWT when snapshot omits it", u.planType == "pro")
+} else { check("relative-reset usage decoded", false) }
+check("no windows at all → nil", CodexMonitor.usage(fromRateLimits: ["plan_type": "team"], snapshotAt: snap, email: nil, jwtPlan: nil) == nil)
+check("window missing used_percent is skipped → nil",
+      CodexMonitor.usage(fromRateLimits: ["primary": ["window_minutes": 300]], snapshotAt: snap, email: nil, jwtPlan: nil) == nil)
+
+print("== 11e. Codex: JWT claim decode + account label (no secrets read out) ==")
+func makeJWT(_ payload: [String: Any]) -> String {
+    let data = try! JSONSerialization.data(withJSONObject: payload)
+    let b64url = data.base64EncodedString()
+        .replacingOccurrences(of: "+", with: "-")
+        .replacingOccurrences(of: "/", with: "_")
+        .replacingOccurrences(of: "=", with: "")
+    return "eyJhbGciOiJub25lIn0.\(b64url).sig"   // header.payload.signature
+}
+let jwt = makeJWT([
+    "email": "brian@heybaro.com",
+    "https://api.openai.com/auth": ["chatgpt_plan_type": "team", "chatgpt_account_id": "acct-1"],
+])
+if let claims = CodexMonitor.decodeJWTClaims(jwt) {
+    check("email claim decoded", claims["email"] as? String == "brian@heybaro.com")
+} else { check("JWT claims decoded", false) }
+let tmpAuth = FileManager.default.temporaryDirectory
+    .appendingPathComponent("cdash-auth-\(UUID().uuidString).json")
+try! JSONSerialization.data(withJSONObject: ["tokens": ["id_token": jwt]]).write(to: tmpAuth)
+let label = CodexMonitor.accountLabel(authURL: tmpAuth)
+check("account label email from auth.json JWT", label.email == "brian@heybaro.com")
+check("account label plan from auth.json JWT", label.plan == "team")
+check("missing auth.json → empty label (no crash)",
+      CodexMonitor.accountLabel(authURL: tmpAuth.appendingPathExtension("nope")).email == nil)
+try? FileManager.default.removeItem(at: tmpAuth)
+
+print("== 11f. Codex: latest token_count from rollout JSONL (tail + fall-through) ==")
+let tmpDir = FileManager.default.temporaryDirectory
+    .appendingPathComponent("cdash-codex-\(UUID().uuidString)", isDirectory: true)
+try! FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+// A file with NO token_count (should be skipped) …
+let emptyRollout = tmpDir.appendingPathComponent("rollout-empty.jsonl")
+try! #"{"type":"response_item","payload":{"type":"message"}}"#.write(to: emptyRollout, atomically: true, encoding: .utf8)
+// … and a file whose LAST token_count is the one we want (an earlier 30% must lose).
+let goodRollout = tmpDir.appendingPathComponent("rollout-good.jsonl")
+try! """
+{"timestamp":"2026-07-08T19:00:00.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":30.0,"window_minutes":43800,"resets_at":1785681569}}}}
+not-json
+{"timestamp":"2026-07-08T19:46:56.323Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":57.0,"window_minutes":43800,"resets_at":1785681569},"plan_type":"team"}}}
+{"type":"response_item","payload":{"type":"message"}}
+""".write(to: goodRollout, atomically: true, encoding: .utf8)
+if let (rl, at) = CodexMonitor.latestTokenCount(in: [emptyRollout, goodRollout]) {
+    let primary = rl["primary"] as? [String: Any]
+    check("skips the token_count-less file and finds the next", (primary?["used_percent"] as? NSNumber)?.doubleValue == 57.0)
+    check("uses the LAST token_count in the file (57, not the earlier 30)", (primary?["used_percent"] as? NSNumber)?.doubleValue == 57.0)
+    let expectedTS: ISO8601DateFormatter = { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f }()
+    let expected = expectedTS.date(from: "2026-07-08T19:46:56.323Z")!
+    check("snapshot timestamp parsed from the event line, not file mtime", abs(at.timeIntervalSince(expected)) < 2)
+} else { check("latestTokenCount found a snapshot", false) }
+check("no files → nil", CodexMonitor.latestTokenCount(in: []) == nil)
+try? FileManager.default.removeItem(at: tmpDir)
+
+print("== 11g. Codex: account-switch label guard (auth.json newer than snapshot ⇒ drop email) ==")
+let t0 = Date()
+check("auth written before the snapshot → trust the label",
+      CodexMonitor.labelAppliesToSnapshot(authModified: t0.addingTimeInterval(-60), snapshotAt: t0))
+check("auth rewritten AFTER the snapshot (login switch) → suppress the label",
+      !CodexMonitor.labelAppliesToSnapshot(authModified: t0.addingTimeInterval(60), snapshotAt: t0))
+check("no auth mtime available → trust (best effort, no crash)",
+      CodexMonitor.labelAppliesToSnapshot(authModified: nil, snapshotAt: t0))
+
 print("== 10. LIVE claude.ai endpoint — invalid key must map to .unauthorized ==")
 if onCI {
     print("  SKIP  (datacenter IPs may be WAF-blocked; run locally)")

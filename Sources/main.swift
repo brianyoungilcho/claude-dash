@@ -158,6 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.verifyStatusItem()
                 Task { await self.model.refreshAll() }
                 self.model.refreshClaudeCode()
+                self.model.refreshCodex()
             }
         }
 
@@ -221,6 +222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if outsideClickMonitor == nil { installOutsideClickMonitor() }
         Task { await model.refreshAll() }
         model.refreshClaudeCode()
+        model.refreshCodex()
     }
 
     /// Clicks in OTHER apps (i.e. outside the panel) dismiss the popover — the
@@ -313,6 +315,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         win.makeKeyAndOrderFront(nil)
         Task { await model.refreshAll() }
         model.refreshClaudeCode()
+        model.refreshCodex()
     }
 
     private func toggleBoardWindow() {
