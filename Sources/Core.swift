@@ -64,15 +64,6 @@ struct Org: Identifiable, Equatable, Hashable {
     var isChatOrg: Bool { capabilities.isEmpty || capabilities.contains("chat") }
 }
 
-/// A recent claude.ai conversation on an account (board "signals" layer).
-struct Convo: Equatable, Identifiable {
-    var uuid: String
-    var name: String
-    var updatedAt: Date?
-    var model: String?
-    var id: String { uuid }
-}
-
 /// Which board account owns the Claude Code login's organization? Pure so
 /// it's unit-testable without the UI layer.
 func matchCCOwner(loginOrgUuid: String?, accounts: [Account]) -> String? {
@@ -293,39 +284,6 @@ enum UsageAPI {
         if orgs.isEmpty { throw UsageError.noOrganizations }
         // Chat orgs first — they're the ones whose usage we can actually read.
         return orgs.sorted { $0.isChatOrg && !$1.isChatOrg }
-    }
-
-    /// Most recent conversations for one organization (title + freshness only).
-    static func conversations(sessionKey: String, orgUuid: String, limit: Int = 20) async throws -> [Convo] {
-        let data = try await run(request("/organizations/\(orgUuid)/chat_conversations?limit=\(limit)",
-                                         sessionKey: sessionKey))
-        guard let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-            throw UsageError.decoding("conversations")
-        }
-        return decodeConversations(arr)
-    }
-
-    /// Only FRESH conversations are signal — stale ones read as noise (heavy
-    /// Claude Code use burns quota without creating web chats, so days-old
-    /// titles would sit there looking broken). Sort defensively (the API is
-    /// recency-ordered today, but don't depend on it), keep ≤48h, cap at 3.
-    static func recentConvos(_ list: [Convo], now: Date = Date()) -> [Convo] {
-        let cutoff = now.addingTimeInterval(-48 * 3600)
-        return list
-            .filter { ($0.updatedAt ?? .distantPast) > cutoff }
-            .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
-            .prefix(3).map { $0 }
-    }
-
-    /// Internal so it can be unit-tested against captured fixtures.
-    static func decodeConversations(_ arr: [[String: Any]]) -> [Convo] {
-        arr.compactMap { c in
-            guard let uuid = c["uuid"] as? String else { return nil }
-            return Convo(uuid: uuid,
-                         name: (c["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled",
-                         updatedAt: (c["updated_at"] as? String).flatMap(date),
-                         model: c["model"] as? String)
-        }
     }
 
     /// Fetch the 5-hour + 7-day usage for one organization.

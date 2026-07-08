@@ -68,19 +68,6 @@ check("read matches", Keychain.get(account: testAccount) == secret)
 Keychain.delete(account: testAccount)
 check("delete removes it", Keychain.get(account: testAccount) == nil)
 
-print("== 5. Conversations decode (fixture captured live 2026-07-06) ==")
-let convoFixture: [[String: Any]] = [
-    ["uuid": "abc-123", "name": "타이어가 파여있는 꿈의 의미", "updated_at": "2026-07-03T11:27:26.024683Z",
-     "model": "claude-fable-5", "is_starred": false, "platform": "web"],
-    ["uuid": "def-456", "name": "", "updated_at": "2026-07-01T00:00:00.000000Z"],
-    ["name": "no uuid — must be skipped"],
-]
-let convos = UsageAPI.decodeConversations(convoFixture)
-check("two valid conversations decoded", convos.count == 2)
-check("korean title preserved", convos.first?.name.hasPrefix("타이어") == true)
-check("updated_at parsed", convos.first?.updatedAt != nil)
-check("empty name becomes Untitled", convos.dropFirst().first?.name == "Untitled")
-
 print("== 6. Notes: checkbox parser + toggle round-trip ==")
 let note = "context line\n- [ ] ship board\n- [x] write tests\nplain end"
 let lines = NoteParser.lines(note)
@@ -182,18 +169,6 @@ for f in (try? FileManager.default.contentsOfDirectory(at: tmpNotes.deletingLast
     includingPropertiesForKeys: nil)) ?? [] where f.lastPathComponent.hasPrefix("notes.json.corrupt-") {
     try? FileManager.default.removeItem(at: f)
 }
-// 9c. Conversation freshness filter: only ≤48h items are signal.
-let cNow = Date()
-let convosFixture = [
-    Convo(uuid: "1", name: "old", updatedAt: cNow.addingTimeInterval(-3 * 86400), model: nil),
-    Convo(uuid: "2", name: "newest", updatedAt: cNow.addingTimeInterval(-600), model: nil),
-    Convo(uuid: "3", name: "yesterday", updatedAt: cNow.addingTimeInterval(-86400), model: nil),
-    Convo(uuid: "4", name: "no-date", updatedAt: nil, model: nil),
-]
-let recents = UsageAPI.recentConvos(convosFixture, now: cNow)
-check("stale + dateless conversations filtered out", recents.count == 2)
-check("sorted newest first regardless of input order", recents.first?.name == "newest" && recents.last?.name == "yesterday")
-check("empty when everything is stale", UsageAPI.recentConvos([convosFixture[0]], now: cNow).isEmpty)
 // 9d. hooksInstalled must survive JSONSerialization's slash escaping.
 let tmpSettings2 = FileManager.default.temporaryDirectory
     .appendingPathComponent("cdash-settings2-\(UUID().uuidString).json")

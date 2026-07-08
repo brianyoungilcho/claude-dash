@@ -102,10 +102,4 @@ enum Prefs {
         set { d.set(newValue, forKey: "boardTextScale") }
     }
 
-    /// Show recent claude.ai conversations under each account.
-    static var showConversations: Bool {
-        get { d.object(forKey: "showConversations") == nil ? true : d.bool(forKey: "showConversations") }
-        set { d.set(newValue, forKey: "showConversations") }
-    }
-
 }

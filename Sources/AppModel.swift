@@ -10,9 +10,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var lastRefresh: Date?
     /// Bumped once a minute so reset countdowns stay live between polls.
     @Published private(set) var displayTick = 0
-    /// Board layer: notes, per-account conversations, Claude Code sessions.
+    /// Board layer: notes and Claude Code sessions.
     @Published private(set) var notes: NotesData = NotesStore.load()
-    @Published private(set) var convos: [String: [Convo]] = [:]
     @Published private(set) var ccSessions: [CCSession] = []
     /// Board account that owns the current Claude Code login (matched by the
     /// CLI's organizationUuid). Sessions render on that account's card; the
@@ -31,7 +30,6 @@ final class AppModel: ObservableObject {
     private var fetchEpoch: [String: Int] = [:]
     // Last (utilization, time) sample per account, for burn-rate projection.
     private var lastSample: [String: (util: Double, at: Date)] = [:]
-    private var convoFetchedAt: [String: Date] = [:]
     private var notesSaveTask: Task<Void, Never>?
 
     init() {
@@ -181,7 +179,6 @@ final class AppModel: ObservableObject {
         Keychain.delete(account: account.id)
         accounts.removeAll { $0.id == account.id }
         usage[account.id] = nil
-        convos[account.id] = nil
         notifiedThreshold.remove(account.id)
         cappedAwaitingReset.remove(account.id)
         lastSample[account.id] = nil
@@ -218,7 +215,6 @@ final class AppModel: ObservableObject {
             usage[accountId] = .ok(u)
             lastRefresh = Date()
             maybeNotify(account, u)
-            await maybeFetchConversations(account, key: key)
         } catch {
             guard fetchEpoch[accountId, default: 0] == epoch,
                   accounts.contains(where: { $0.id == accountId }) else { return }
@@ -238,26 +234,11 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Conversations are context, not telemetry — refresh them lazily (every
-    /// 5 minutes per account, piggybacked on a successful usage fetch).
-    private func maybeFetchConversations(_ account: Account, key: String) async {
-        guard Prefs.showConversations else { return }
-        let last = convoFetchedAt[account.id] ?? .distantPast
-        guard Date().timeIntervalSince(last) > 300 else { return }
-        if let list = try? await UsageAPI.conversations(sessionKey: key, orgUuid: account.orgUuid),
-           accounts.contains(where: { $0.id == account.id }) {
-            convoFetchedAt[account.id] = Date()   // stamp on SUCCESS — failures retry next poll
-            convos[account.id] = UsageAPI.recentConvos(list)
-        }
-    }
-
-    /// User-initiated refresh: bypass the conversations' lazy 5-minute window
-    /// so the button actually refreshes everything visible. Guards against
+    /// User-initiated refresh: re-fetch everything visible. Guards against
     /// stacking concurrent refreshes and drives the header spinner.
     func userRefresh() async {
         guard !isRefreshing else { return }
         isRefreshing = true
-        convoFetchedAt.removeAll()
         await refreshAll()
         refreshClaudeCode()
         isRefreshing = false
