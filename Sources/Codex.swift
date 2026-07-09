@@ -20,6 +20,13 @@ import Foundation
 struct CodexWindow: Equatable {
     var label: String        // "5h", "weekly", "monthly", … (see windowLabel)
     var metric: UsageMetric  // utilization % + reset time — reuses the Claude type
+
+    /// Capped only while the reset is still ahead. Codex snapshots go stale
+    /// between turns (nothing rewrites them at reset time), so a 100% window
+    /// whose reset already passed must not keep the card dimmed.
+    func isCurrentlyCapped(now: Date = Date()) -> Bool {
+        metric.isCapped && !(metric.resetsAt.map { $0 <= now } ?? false)
+    }
 }
 
 /// A snapshot of the logged-in Codex account's usage, read from local files.
