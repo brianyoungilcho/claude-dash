@@ -32,9 +32,13 @@ struct AccountNote: Codable, Equatable {
 }
 
 struct NotesData: Codable, Equatable {
+    /// Reserved `accounts` key for the Codex card's note. Real account ids are
+    /// UUID strings, so this can never collide with one.
+    static let codexKey = "codex"
+
     var v: Int = 1
     var global: String = ""
-    var accounts: [String: AccountNote] = [:]   // by account id
+    var accounts: [String: AccountNote] = [:]   // by account id (+ codexKey)
 
     init() {}
 

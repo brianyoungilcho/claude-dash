@@ -90,6 +90,11 @@ in the right browser profile.
   403 with the right headers); use URLSession for any endpoint probing.
 - Block-based NotificationCenter observers must be removed via their token —
   `removeObserver(self, …)` silently does nothing for them.
+- Never bind @Published-derived text straight into a TextEditor/TextField
+  (`Binding(get: { model… }, set: …)`): every model republish can rewrite the
+  AppKit text view mid-edit — the caret jumps to the end and Korean IME
+  composition breaks. Bind a view-local @State and stream changes outward
+  (see NoteView's `draft`).
 
 ## Uninstalling for a user
 

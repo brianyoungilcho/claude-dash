@@ -51,8 +51,21 @@ struct HoverHighlight: ViewModifier {
     }
 }
 
+/// De-emphasize a card whose account is at a 100% limit so attention flows to
+/// the accounts that still have headroom. Kept legible (controls stay
+/// clickable), and dimmed less under Increase Contrast.
+struct CappedDim: ViewModifier {
+    var capped: Bool
+    @Environment(\.colorSchemeContrast) private var contrast
+    func body(content: Content) -> some View {
+        content.opacity(capped ? (contrast == .increased ? 0.8 : 0.6) : 1)
+    }
+}
+
 extension View {
     func hoverHighlight() -> some View { modifier(HoverHighlight()) }
+
+    func cappedDim(_ capped: Bool) -> some View { modifier(CappedDim(capped: capped)) }
 
     /// Clicks in empty window space end any in-progress note edit (macOS only
     /// moves keyboard focus on control clicks, so we resign first responder
@@ -140,18 +153,28 @@ struct NoteView: View {
 
     @Environment(\.dashScale) private var s
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.controlActiveState) private var activeState
     @State private var editing = false
+    // Edit-session buffer: the editor binds this stable local state, so model
+    // republishes (polls, ticks, the per-keystroke echo through @Published
+    // notes) can never rewrite the NSTextView mid-edit — that rewrite is what
+    // threw the caret to the end and broke Korean IME composition.
+    @State private var draft = ""
     @FocusState private var focused: Bool
 
     var body: some View {
         Group {
             if editing {
                 VStack(alignment: .leading, spacing: 4 * s) {
-                    TextEditor(text: Binding(get: { text }, set: onChange))
+                    TextEditor(text: $draft)
                         .font(.system(size: 11 * s))
                         .scrollContentBackground(.hidden)
                         .frame(minHeight: 52 * s, maxHeight: 160 * s)
                         .focused($focused)
+                        // Stream every change so autosave, quit-flush, and the
+                        // other surface (popover/board can show the same note)
+                        // stay live while typing.
+                        .onChange(of: draft, perform: onChange)
                         .onChange(of: focused) { if !$0 { finishEditing() } }
                         .onExitCommand { finishEditing() }   // Esc commits the note
                     HStack(spacing: 6) {
@@ -231,13 +254,23 @@ struct NoteView: View {
             }
         }
         .help("Click to edit. Lines like “- [ ] task” become checkboxes. Saves automatically.")
+        // Commit the moment this window stops being key: the popover and board
+        // can both show the same note, and macOS windows keep their first
+        // responder while non-key — so without this, an editor left open in the
+        // other window would hold a stale draft whose next keystroke streams
+        // over everything written here since.
+        .onChange(of: activeState) { if $0 != .key { finishEditing() } }
     }
 
-    private func startEditing() { editing = true; focused = true }
+    private func startEditing() { draft = text; editing = true; focused = true }
 
     private func finishEditing() {
+        guard editing else { return }   // focus-loss, Esc/Done, and window-deactivate can stack
         editing = false
         focused = false
+        // No final draft push: every change already streamed via onChange, and
+        // re-pushing here would let a stale editor left open in the other
+        // window clobber newer text written since.
         onCommit()
     }
 }
@@ -341,7 +374,10 @@ struct DashboardView: View {
                             Divider()
                         }
                         if let codex = model.codex {
-                            CodexSection(usage: codex, tick: model.displayTick)
+                            CodexSection(usage: codex, tick: model.displayTick,
+                                         noteText: model.notes.accounts[NotesData.codexKey]?.text ?? "",
+                                         noteChanged: { model.setNote(accountId: NotesData.codexKey, text: $0) },
+                                         noteCommitted: { model.flushNotesNow() })
                             Divider()
                         }
                         if !model.ccUnmatchedSessions.isEmpty {
@@ -412,6 +448,13 @@ struct AccountRow: View {
     var moveDown: (() -> Void)? = nil
     @Environment(\.dashScale) private var s
 
+    /// Some limit is at 100% — nothing to act on here until a reset. A manual
+    /// attention flag wins over the dim: the user explicitly pinned focus here.
+    private var capped: Bool {
+        if case .ok(let u) = state { return u.anyLimitCapped }
+        return false
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 8 * s) {
             VStack(alignment: .leading, spacing: 5 * s) {
@@ -457,6 +500,7 @@ struct AccountRow: View {
         .overlay(alignment: .leading) {
             if flagged { Rectangle().fill(Color.orange).frame(width: 2) }
         }
+        .cappedDim(capped && !flagged)
         .contextMenu { rowMenuItems }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Account \(account.displayName), \(healthDescription)\(flagged ? ", flagged for attention" : "")")
@@ -478,7 +522,9 @@ struct AccountRow: View {
 
     private var healthDescription: String {
         switch state {
-        case .ok(let u): return "session \(Int(u.session?.utilization ?? 0)) percent used"
+        case .ok(let u):
+            return "session \(Int(u.session?.utilization ?? 0)) percent used"
+                + (u.anyLimitCapped ? ", limit reached" : "")
         case .unauthorized: return "session key expired"
         case .rateLimited: return "rate limited"
         case .error: return "unavailable"
@@ -639,6 +685,9 @@ struct ClaudeCodeSection: View {
 struct CodexSection: View {
     var usage: CodexUsage
     var tick: Int = 0   // recompute the "as of" age on the minute pulse
+    var noteText: String = ""
+    var noteChanged: (String) -> Void = { _ in }
+    var noteCommitted: () -> Void = {}
     @Environment(\.dashScale) private var s
 
     var body: some View {
@@ -673,11 +722,23 @@ struct CodexSection: View {
                 MetricLine(label: window.label, metric: window.metric,
                            trailing: resetString(window.metric.resetsAt))
             }
+            NoteView(text: noteText,
+                     placeholder: "What am I working on here…",
+                     onChange: noteChanged,
+                     onCommit: noteCommitted)
         }
         .padding(.horizontal, 12 * s).padding(.vertical, 9 * s)
+        .cappedDim(capped)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Codex usage" + (usage.accountEmail.map { ", \($0)" } ?? "")
+                            + (capped ? ", limit reached" : "")
                             + (stale ? ", reading may be out of date" : ""))
+    }
+
+    /// Recomputed on the minute pulse (`tick` re-renders), so the dim lifts on
+    /// its own once a capped window's reset time passes.
+    private var capped: Bool {
+        usage.windows.contains { $0.isCurrentlyCapped() }
     }
 
     /// A stale reading: the snapshot is over an hour old, or a window's own

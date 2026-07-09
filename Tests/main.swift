@@ -83,11 +83,43 @@ print("== 7. Notes persistence round-trip (Codable) ==")
 var nd = NotesData()
 nd.global = "scratch ✍️"
 nd.accounts["id1"] = AccountNote(text: "- [ ] renew key", flagged: true, updatedAt: Date())
+nd.accounts[NotesData.codexKey] = AccountNote(text: "port the CLI", updatedAt: Date())
 if let enc = try? JSONEncoder().encode(nd), let dec = try? JSONDecoder().decode(NotesData.self, from: enc) {
     check("notes encode/decode round-trips", dec.global == nd.global
           && dec.accounts["id1"]?.flagged == true
           && dec.accounts["id1"]?.text == "- [ ] renew key")
+    check("codex note (reserved key) round-trips", dec.accounts[NotesData.codexKey]?.text == "port the CLI")
 } else { check("notes codable round-trip", false) }
+
+print("== 7b. Capped-limit detection (drives the card dim) ==")
+func au(_ session: Double?, _ weekly: Double?, scoped: [Double] = [], extra: Double? = nil) -> AccountUsage {
+    AccountUsage(session: session.map { UsageMetric(utilization: $0, resetsAt: nil) },
+                 weekly: weekly.map { UsageMetric(utilization: $0, resetsAt: nil) },
+                 scoped: scoped.map { ScopedMetric(name: "Fable", metric: UsageMetric(utilization: $0, resetsAt: nil)) },
+                 extra: extra.map { ExtraUsage(percent: $0, usedDisplay: nil) },
+                 fetchedAt: Date())
+}
+check("all under 100 → not capped", !au(62, 4, scoped: [5]).anyLimitCapped)
+check("99.9 → not capped (threshold is the real cap, >= 100)", !au(99.9, 0).anyLimitCapped)
+check("session at 100 → capped", au(100, 4).anyLimitCapped)
+check("weekly at 100 → capped", au(3, 100).anyLimitCapped)
+check("scoped (Fable) at 100 → capped", au(3, 4, scoped: [100]).anyLimitCapped)
+check("utilization above 100 → capped", au(101, 0).anyLimitCapped)
+check("extra spend at 100 is a budget, not a lockout → not capped", !au(3, 4, extra: 100).anyLimitCapped)
+check("no metrics at all → not capped", !au(nil, nil).anyLimitCapped)
+
+// Codex windows go stale between turns — an elapsed reset lifts the dim.
+let capNow = Date()
+func cw(_ pct: Double, resetIn: Double?) -> CodexWindow {
+    CodexWindow(label: "5h", metric: UsageMetric(utilization: pct,
+                                                 resetsAt: resetIn.map { capNow.addingTimeInterval($0) }))
+}
+check("codex 100% with reset ahead → capped", cw(100, resetIn: 600).isCurrentlyCapped(now: capNow))
+check("codex 100% but reset already passed → NOT capped (stale snapshot)",
+      !cw(100, resetIn: -600).isCurrentlyCapped(now: capNow))
+check("codex 100% with no reset info → capped (trust the percent)",
+      cw(100, resetIn: nil).isCurrentlyCapped(now: capNow))
+check("codex 82% → not capped", !cw(82, resetIn: 600).isCurrentlyCapped(now: capNow))
 
 print("== 8. Claude Code: sessions from hook events + hooks merge (temp fixture) ==")
 let tmpEvents = FileManager.default.temporaryDirectory

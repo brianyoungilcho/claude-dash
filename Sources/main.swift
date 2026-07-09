@@ -236,6 +236,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func hidePanel() {
+        // End any in-progress note edit first — an ordered-out window keeps its
+        // first responder, so without this a hidden editor would sit on a stale
+        // draft while the board edits the same note.
+        panel.makeFirstResponder(nil)
         panel.orderOut(nil)
         if let m = outsideClickMonitor { NSEvent.removeMonitor(m); outsideClickMonitor = nil }
     }

@@ -25,6 +25,7 @@ struct BoardContent: View {
     var remove: (Account) -> Void = { _ in }
     var noteChanged: (Account, String) -> Void = { _, _ in }
     var globalNoteChanged: (String) -> Void = { _ in }
+    var codexNoteChanged: (String) -> Void = { _ in }
     var noteCommitted: () -> Void = {}
     var moveUp: (Account) -> (() -> Void)? = { _ in nil }
     var moveDown: (Account) -> (() -> Void)? = { _ in nil }
@@ -83,7 +84,10 @@ struct BoardContent: View {
                     }
                 }
                 if let codex {
-                    card { CodexSection(usage: codex, tick: displayTick) }
+                    card { CodexSection(usage: codex, tick: displayTick,
+                                        noteText: notes.accounts[NotesData.codexKey]?.text ?? "",
+                                        noteChanged: codexNoteChanged,
+                                        noteCommitted: noteCommitted) }
                 }
                 if !ccSessions.isEmpty {
                     card { ClaudeCodeSection(sessions: ccSessions) }
@@ -143,6 +147,7 @@ struct BoardView: View {
             remove: onRemove,
             noteChanged: { model.setNote(accountId: $0.id, text: $1) },
             globalNoteChanged: { model.setGlobalNote($0) },
+            codexNoteChanged: { model.setNote(accountId: NotesData.codexKey, text: $0) },
             noteCommitted: { model.flushNotesNow() },
             moveUp: { a in moveClosure(a, in: model.sortedAccounts, by: -1, model: model) },
             moveDown: { a in moveClosure(a, in: model.sortedAccounts, by: 1, model: model) }

@@ -34,6 +34,26 @@ struct AccountUsage: Equatable {
     var projectedCap: Date?
 }
 
+extension UsageMetric {
+    /// At (or past) the hard limit. Matches the used-% label, which truncates,
+    /// so only >= 100 displays "100%". (The optional remaining-% label rounds
+    /// and can read "0% left" a hair early — the dim keys off the real cap,
+    /// not that rounding.)
+    var isCapped: Bool { utilization >= 100 }
+}
+
+extension AccountUsage {
+    /// Some limit window (session, weekly, or a per-model cap) is exhausted,
+    /// so the card is de-emphasized. A scoped cap only blocks that one model,
+    /// but it still merits the dim — the dashboard's job is routing attention
+    /// to accounts with headroom. Extra-usage spend is excluded: it's a budget
+    /// meter, not a lockout.
+    var anyLimitCapped: Bool {
+        ([session, weekly].compactMap { $0 } + scoped.map(\.metric))
+            .contains(where: \.isCapped)
+    }
+}
+
 /// The live state of a single account's usage fetch.
 enum UsageState: Equatable {
     case unknown

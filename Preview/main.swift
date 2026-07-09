@@ -29,6 +29,8 @@ MainActor.assumeIsolated {
                     chromeProfileDir: "Profile 1", chromeProfileLabel: "Work — alice@acme.com")
     let c = Account(id: "c", displayName: "Team", orgUuid: "3", orgName: "Acme Team",
                     chromeProfileDir: "Profile 2", chromeProfileLabel: "Team — bot@acme.com")
+    let d = Account(id: "d", displayName: "Backup", orgUuid: "4", orgName: "Acme Backup",
+                    chromeProfileDir: "Profile 3", chromeProfileLabel: "Backup — spare@acme.com")
 
     let now = Date()
     let usage: [String: UsageState] = [
@@ -43,8 +45,12 @@ MainActor.assumeIsolated {
                               fetchedAt: now,
                               projectedCap: now.addingTimeInterval(2700))),
         "c": .unauthorized,
+        // A capped account — session at 100% dims the whole card.
+        "d": .ok(AccountUsage(session: UsageMetric(utilization: 100, resetsAt: now.addingTimeInterval(3000)),
+                              weekly: UsageMetric(utilization: 64, resetsAt: now.addingTimeInterval(400000)),
+                              fetchedAt: now)),
     ]
-    let accounts = [a, b, c]
+    let accounts = [a, b, c, d]
 
     // Menu-bar gauges on a dark bar — mirrors the app's appearance-matched render.
     render(MenuBarGaugesView(accounts: accounts, usage: usage).frame(height: 18).padding(4)
@@ -98,7 +104,7 @@ MainActor.assumeIsolated {
                            edit: {}, remove: {}, toggleFlag: {}, noteChanged: { _ in })
                 Divider()
             }
-            CodexSection(usage: codexSample)
+            CodexSection(usage: codexSample, noteText: "- [ ] port the CLI helper")
             Divider()
             HStack {
                 Text("Add account…").font(.system(size: 12)).foregroundStyle(.tint)
@@ -123,6 +129,7 @@ MainActor.assumeIsolated {
                          n.global = "Focus this week: launch + sitemap fix"
                          n.accounts["a"] = AccountNote(text: sampleNotes["a"]!.0, flagged: false)
                          n.accounts["b"] = AccountNote(text: sampleNotes["b"]!.0, flagged: true)
+                         n.accounts[NotesData.codexKey] = AccountNote(text: "- [ ] port the CLI helper")
                          return n
                      }(),
                      ccSessions: [],
