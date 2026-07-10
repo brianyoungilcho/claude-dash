@@ -8,7 +8,7 @@ jobs:
   build-and-test:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - name: Bootstrap pinned Sparkle framework
         run: ./Scripts/bootstrap-sparkle.sh
       - name: Build universal app bundle
