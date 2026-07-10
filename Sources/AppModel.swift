@@ -35,8 +35,9 @@ final class AppModel: ObservableObject {
     // fetch started under the old key/config can't overwrite fresh state.
     private var fetchEpoch: [String: Int] = [:]
     /// Prevent a timer, wake event, and a manual refresh from racing the same
-    /// account. Each fetch owns its entry until its result is applied.
-    private var inFlightFetches: Set<String> = []
+    /// account. The epoch is part of the key so replacing a credential can
+    /// immediately fetch with the new key while an old request winds down.
+    private var inFlightFetchEpochs: [String: Set<Int>] = [:]
     private var failureCounts: [String: Int] = [:]
     private var authenticationFailureCounts: [String: Int] = [:]
     private var retryNotBefore: [String: Date] = [:]
@@ -193,7 +194,7 @@ final class AppModel: ObservableObject {
         notifiedThreshold.remove(account.id)
         cappedAwaitingReset.remove(account.id)
         lastSample[account.id] = nil
-        inFlightFetches.remove(account.id)
+        inFlightFetchEpochs[account.id] = nil
         failureCounts[account.id] = nil
         authenticationFailureCounts[account.id] = nil
         retryNotBefore[account.id] = nil
@@ -232,16 +233,20 @@ final class AppModel: ObservableObject {
     func refresh(_ account: Account, force: Bool = false) async -> FetchOutcome {
         let accountId = account.id
         let now = Date()
+        let epoch = fetchEpoch[accountId, default: 0]
         if !force, let retryAt = retryNotBefore[accountId], retryAt > now { return .skipped }
         // Respect a server-requested delay even for the Refresh button.
         if force, case .rateLimited(let retryAt?) = usage[accountId]?.usageProblem, retryAt > now {
             return .skipped
         }
-        guard !inFlightFetches.contains(accountId) else { return .skipped }
-        inFlightFetches.insert(accountId)
-        defer { inFlightFetches.remove(accountId) }
+        guard !(inFlightFetchEpochs[accountId]?.contains(epoch) ?? false) else { return .skipped }
+        inFlightFetchEpochs[accountId, default: []].insert(epoch)
+        defer {
+            var epochs = inFlightFetchEpochs[accountId] ?? []
+            epochs.remove(epoch)
+            inFlightFetchEpochs[accountId] = epochs.isEmpty ? nil : epochs
+        }
 
-        let epoch = fetchEpoch[accountId, default: 0]
         let credential = await Task.detached(operation: { Keychain.read(account: accountId) }).value
         guard fetchEpoch[accountId, default: 0] == epoch,
               accounts.contains(where: { $0.id == accountId }) else { return .skipped }
