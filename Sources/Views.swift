@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Density scale (popover = 1.0; board window = user preference)
+// MARK: - Dashboard zoom (Quick Glance and Board each supply their own scale)
 
 private struct DashScaleKey: EnvironmentKey { static let defaultValue: CGFloat = 1.0 }
 extension EnvironmentValues {
@@ -177,19 +177,21 @@ struct NoteView: View {
                         .onChange(of: draft, perform: onChange)
                         .onChange(of: focused) { if !$0 { finishEditing() } }
                         .onExitCommand { finishEditing() }   // Esc commits the note
-                    HStack(spacing: 6) {
+                    HStack(spacing: 6 * s) {
                         Text("Saves automatically · “- [ ] task” becomes a checkbox")
                             .font(.system(size: 9 * s)).foregroundStyle(.tertiary)
                             .lineLimit(1)
                         Spacer()
-                        Button("Done") { finishEditing() }
-                            .controlSize(.small)
+                        Button(action: finishEditing) {
+                            Text("Done").font(.system(size: 10 * s))
+                        }
+                            .controlSize(s >= 1.4 ? .regular : .small)
                             .keyboardShortcut(.return, modifiers: .command)
                             .help("Finish editing (⌘⏎ or Esc). Notes also save when you click away.")
                     }
                 }
             } else if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                HStack(spacing: 5) {
+                HStack(spacing: 5 * s) {
                     Image(systemName: "square.and.pencil")
                         .font(.system(size: 10 * s)).foregroundStyle(.secondary)
                     Text(placeholder)
@@ -209,7 +211,7 @@ struct NoteView: View {
                     ForEach(Array(NoteParser.lines(text).enumerated()), id: \.offset) { idx, line in
                         switch line {
                         case .checkbox(let done, let body):
-                            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                            HStack(alignment: .firstTextBaseline, spacing: 5 * s) {
                                 Button {
                                     onChange(NoteParser.toggle(text, line: idx))
                                     onCommit()
@@ -247,10 +249,10 @@ struct NoteView: View {
             }
         }
         .padding(6 * s)
-        .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(surfaceOpacity(0.05, contrast))))
+        .background(RoundedRectangle(cornerRadius: 5 * s).fill(Color.primary.opacity(surfaceOpacity(0.05, contrast))))
         .overlay {
             if editing {
-                RoundedRectangle(cornerRadius: 5).strokeBorder(Color.accentColor.opacity(0.7), lineWidth: 1.5)
+                RoundedRectangle(cornerRadius: 5 * s).strokeBorder(Color.accentColor.opacity(0.7), lineWidth: 1.5 * s)
             }
         }
         .help("Click to edit. Lines like “- [ ] task” become checkboxes. Saves automatically.")
@@ -290,7 +292,10 @@ struct EmptyAccountsView: View {
                 .font(.system(size: 11 * s)).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("Add account…", action: onAdd).controlSize(.large)
+            Button(action: onAdd) {
+                Text("Add account…").font(.system(size: 12 * s, weight: .medium))
+            }
+            .controlSize(s >= 1.4 ? .large : .regular)
         }
         .padding(24 * s)
         .frame(maxWidth: .infinity)
@@ -301,14 +306,15 @@ struct EmptyAccountsView: View {
 struct UpdatedFooterText: View {
     var lastRefresh: Date?
     var tick: Int   // dependency so it recomputes on the minute pulse
+    @Environment(\.dashScale) private var s
     var body: some View {
         if let info = updatedLabel(lastRefresh, pollInterval: Prefs.pollInterval) {
-            HStack(spacing: 3) {
+            HStack(spacing: 3 * s) {
                 if info.stale {
-                    Image(systemName: "wifi.slash").font(.system(size: 9))
+                    Image(systemName: "wifi.slash").font(.system(size: 9 * s))
                 }
                 Text(info.stale ? "\(info.text) — retrying" : info.text)
-                    .font(.system(size: 10))
+                    .font(.system(size: 10 * s))
             }
             .foregroundStyle(info.stale ? Color.orange : Color.secondary)
         }
@@ -348,19 +354,20 @@ struct UsageProblemBanner: View {
 /// Refresh button that shows a spinner and disables itself while in flight.
 struct RefreshButton: View {
     @ObservedObject var model: AppModel
+    @Environment(\.dashScale) private var s
     var body: some View {
         Group {
             if model.isRefreshing {
-                ProgressView().controlSize(.small)
+                ProgressView().controlSize(s >= 1.4 ? .regular : .small)
             } else {
                 Button(action: { Task { await model.userRefresh() } }) {
-                    Image(systemName: "arrow.clockwise")
+                    Image(systemName: "arrow.clockwise").font(.system(size: 12 * s))
                 }
                 .buttonStyle(.borderless)
                 .help("Refresh all")
             }
         }
-        .frame(width: 20)
+        .frame(width: 20 * s, height: 20 * s)
     }
 }
 
@@ -371,6 +378,11 @@ struct DashboardView: View {
     var onPrefs: () -> Void
     var onRemove: (Account) -> Void = { _ in }
     var onOpenBoard: () -> Void = {}
+
+    /// This view is rebuilt from `AppModel` after Preferences/menu actions
+    /// publish, so reading the stored value here lets an already-open panel
+    /// resize immediately without introducing a second presentation model.
+    private var scale: CGFloat { CGFloat(Prefs.quickGlanceTextScale) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -426,43 +438,50 @@ struct DashboardView: View {
             }
             footer
         }
-        .frame(width: 340)
-        .frame(maxHeight: 560)
+        .frame(width: 340 * scale)
+        .frame(minHeight: 120 * scale, maxHeight: 560 * scale)
+        .environment(\.dashScale, scale)
     }
 
 
     private var header: some View {
-        HStack {
-            Text("Claude Dash").font(.system(size: 13, weight: .semibold))
+        HStack(spacing: 8 * scale) {
+            Text("Claude Dash").font(.system(size: 13 * scale, weight: .semibold))
             Spacer()
-            Button(action: onOpenBoard) { Image(systemName: "macwindow") }
+            Button(action: onOpenBoard) {
+                Image(systemName: "macwindow").font(.system(size: 12 * scale))
+            }
                 .buttonStyle(.borderless)
                 .help("Open as a window — bigger text, resizable, notes side by side (⌃⌥⌘D)")
-            Button(action: onPrefs) { Image(systemName: "gearshape") }
+            Button(action: onPrefs) {
+                Image(systemName: "gearshape").font(.system(size: 12 * scale))
+            }
                 .buttonStyle(.borderless)
                 .help("Settings")
             RefreshButton(model: model)
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
+        .padding(.horizontal, 12 * scale).padding(.vertical, 8 * scale)
     }
 
     private var globalNote: some View {
         NoteView(text: model.notes.global,
-                 placeholder: "Scratchpad — what's going on across everything…",
-                 onChange: { model.setGlobalNote($0) },
-                 onCommit: { model.flushNotesNow() })
-            .padding(.horizontal, 12).padding(.vertical, 8)
+            placeholder: "Scratchpad — what's going on across everything…",
+            onChange: { model.setGlobalNote($0) },
+            onCommit: { model.flushNotesNow() })
+            .padding(.horizontal, 12 * scale).padding(.vertical, 8 * scale)
     }
 
     private var footer: some View {
         VStack(spacing: 0) {
             Divider()
             HStack {
-                Button("Add account…", action: onAdd).buttonStyle(.borderless)
+                Button(action: onAdd) {
+                    Text("Add account…").font(.system(size: 12 * scale))
+                }.buttonStyle(.borderless)
                 Spacer()
                 UpdatedFooterText(lastRefresh: model.lastRefresh, tick: model.displayTick)
             }
-            .padding(.horizontal, 12).padding(.vertical, 7)
+            .padding(.horizontal, 12 * scale).padding(.vertical, 7 * scale)
         }
     }
 }
@@ -518,23 +537,23 @@ struct AccountRow: View {
                 Button(action: open) {
                     Text("Open").font(.system(size: 11 * s, weight: .medium))
                 }
-                .controlSize(.small)
+                .controlSize(s >= 1.4 ? .regular : .small)
                 .help("Open claude.ai in \(account.chromeProfileLabel)")
                 Menu {
                     rowMenuItems
                 } label: {
-                    Image(systemName: "ellipsis")
+                    Image(systemName: "ellipsis").font(.system(size: 12 * s))
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
-                .frame(width: 24 * s)
+                .frame(width: 24 * s, height: 24 * s)
                 .help("More actions")
             }
         }
         .padding(.horizontal, 12 * s).padding(.vertical, 9 * s)
         .background(flagged ? Color.orange.opacity(0.06) : Color.clear)
         .overlay(alignment: .leading) {
-            if flagged { Rectangle().fill(Color.orange).frame(width: 2) }
+            if flagged { Rectangle().fill(Color.orange).frame(width: 2 * s) }
         }
         .cappedDim(capped && !flagged)
         .contextMenu { rowMenuItems }
@@ -578,8 +597,8 @@ struct AccountRow: View {
                 problemLine(problem)
             }
         case .loading, .unknown:
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
+            HStack(spacing: 6 * s) {
+                ProgressView().controlSize(s >= 1.4 ? .regular : .small)
                 Text("Loading…").font(.system(size: 11 * s)).foregroundStyle(.secondary)
             }.frame(height: 20 * s)
         case .problem(let problem):
@@ -591,7 +610,7 @@ struct AccountRow: View {
         let session = u.session?.utilization ?? 0
         VStack(alignment: .leading, spacing: 4 * s) {
             // Session — the primary metric, full-size bar.
-            HStack {
+            HStack(spacing: 6 * s) {
                 Text("Session").font(.system(size: 10 * s)).foregroundStyle(.secondary)
                 Spacer()
                 Text(resetString(u.session?.resetsAt))
@@ -676,13 +695,13 @@ struct CCSessionLines: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2 * s) {
             ForEach(sessions) { session in
-                HStack(spacing: 5) {
+                HStack(spacing: 5 * s) {
                     Image(systemName: "terminal")
                         .font(.system(size: 8 * s))
                         .foregroundStyle(session.waiting ? .orange : .secondary)
                     Text("Claude Code · \(session.projectDisplay)")
                         .font(.system(size: 10 * s)).lineLimit(1)
-                    Spacer(minLength: 4)
+                    Spacer(minLength: 4 * s)
                     Text(session.waiting ? "waiting for your input" : relative(session.lastActivity))
                         .font(.system(size: 9 * s))
                         .foregroundStyle(session.waiting ? .orange : .secondary)
@@ -1180,6 +1199,7 @@ struct PreferencesView: View {
     @State private var hotkeyEnabled = Prefs.hotkeyEnabled
     @State private var launchAtLogin = false
     @State private var boardFloats = Prefs.boardFloats
+    @State private var quickGlanceTextScale = Prefs.quickGlanceTextScale
     @State private var boardTextScale = Prefs.boardTextScale
     @State private var hooksInstalled = ClaudeCodeMonitor.hooksInstalled()
     @State private var hooksError: String?
@@ -1204,11 +1224,27 @@ struct PreferencesView: View {
             }
             Section {
                 Toggle("Board window stays on top", isOn: $boardFloats)
-                Picker("Board text size", selection: $boardTextScale) {
-                    Text("Standard").tag(1.0)
-                    Text("Large").tag(1.25)
-                    Text("X-Large").tag(1.5)
+                Picker("Quick Glance size", selection: $quickGlanceTextScale) {
+                    ForEach(DashboardZoom.levels, id: \.self) { scale in
+                        Text(DashboardZoom.label(scale, default: DashboardZoom.quickGlanceDefault)).tag(scale)
+                    }
                 }
+                Picker("Board size", selection: $boardTextScale) {
+                    ForEach(DashboardZoom.levels, id: \.self) { scale in
+                        Text(DashboardZoom.label(scale, default: DashboardZoom.boardDefault)).tag(scale)
+                    }
+                }
+                HStack {
+                    Button("Reset Quick Glance") {
+                        quickGlanceTextScale = DashboardZoom.quickGlanceDefault
+                    }
+                    Button("Reset Board") {
+                        boardTextScale = DashboardZoom.boardDefault
+                    }
+                }
+                Text("Zoom a focused dashboard with ⌘+, ⌘−, or ⌘0. ⌥+ and ⌥− also work outside note editing.")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 HStack {
                     Text(hooksInstalled
                          ? "Claude Code hooks installed — active sessions and “waiting for your input” show on the board"
@@ -1265,6 +1301,10 @@ struct PreferencesView: View {
         .onChange(of: launchAtLogin) { v in onLoginItemToggle(v) }
         .onChange(of: monitorCodex) { v in Prefs.monitorCodex = v; model.refreshCodex() }
         .onChange(of: boardFloats) { v in Prefs.boardFloats = v; model.objectWillChange.send() }
+        .onChange(of: quickGlanceTextScale) { v in
+            Prefs.quickGlanceTextScale = v
+            model.objectWillChange.send()
+        }
         .onChange(of: boardTextScale) { v in Prefs.boardTextScale = v; model.objectWillChange.send() }
     }
 }

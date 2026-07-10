@@ -73,7 +73,9 @@ private func hotKeyHandler(_ next: EventHandlerCallRef?, _ event: EventRef?,
 // MARK: - App delegate
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+    private enum ZoomSurface { case quickGlance, board }
+
     let model = AppModel()
     private var statusItem: NSStatusItem!
     private var panel: DashboardPanel!
@@ -84,6 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var outsideClickMonitor: Any?
     private var hotKeyRef: EventHotKeyRef?
     private var hotKeyHandlerInstalled = false
+    private var localZoomEventMonitor: Any?
     private var sigtermSource: DispatchSourceSignal?
     private var statusWatchdog: Timer?
     /// AppKit closes all windows DURING terminate teardown (after
@@ -102,6 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusItem()
         registerLoginItemOnce()
         syncHotkey()
+        installZoomShortcutMonitor()
         model.startPolling()
         if Prefs.boardWasOpen { openBoardWindow() }
 
@@ -115,6 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.syncHotkey()
                     // Float preference may have changed in Preferences.
                     self.boardWindow?.level = Prefs.boardFloats ? .floating : .normal
+                    self.syncBoardGeometry()
                     self.resizePanelIfNeeded()
                 }
             }
@@ -172,6 +177,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         isTerminating = true
+        if let monitor = localZoomEventMonitor {
+            NSEvent.removeMonitor(monitor)
+            localZoomEventMonitor = nil
+        }
         model.flushNotesNow()
     }
 
@@ -215,8 +224,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showPanel() {
-        let size = hostingView.fittingSize
-        panel.setContentSize(NSSize(width: max(size.width, 340), height: min(max(size.height, 120), 600)))
+        panel.setContentSize(fittingPanelSize())
         positionPanel()
         panel.makeKeyAndOrderFront(nil)
         if outsideClickMonitor == nil { installOutsideClickMonitor() }
@@ -245,25 +253,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Keep the visible popover sized to its content — rows appear, disappear,
-    /// and grow while it's open.
+    /// and grow while it's open. Zoomed Quick Glance content is clamped to the
+    /// current screen rather than growing offscreen.
     private func resizePanelIfNeeded() {
         guard panel.isVisible else { return }
-        let size = hostingView.fittingSize
-        let target = NSSize(width: max(size.width, 340), height: min(max(size.height, 120), 600))
+        let target = fittingPanelSize()
         guard abs(panel.frame.height - target.height) > 2 || abs(panel.frame.width - target.width) > 2 else { return }
-        let top = panel.frame.maxY
         panel.setContentSize(target)
-        panel.setFrameOrigin(NSPoint(x: panel.frame.origin.x, y: top - panel.frame.height))
+        // A larger size can put the old center past a display edge; always
+        // re-anchor beneath the status item after a zoom/layout change.
+        positionPanel()
+    }
+
+    private func panelVisibleFrame() -> NSRect {
+        if let screen = statusItem?.button?.window?.screen ?? panel?.screen ?? NSScreen.main {
+            return screen.visibleFrame
+        }
+        // Only used before AppKit has attached a screen. A non-zero fallback
+        // keeps the sizing math well-defined until the next run-loop pass.
+        return NSRect(x: 0, y: 0, width: 800, height: 600)
+    }
+
+    private func fittingPanelSize() -> NSSize {
+        let fitting = hostingView.fittingSize
+        let visible = panelVisibleFrame()
+        let maxWidth = max(1, visible.width - 16)
+        let maxHeight = max(1, visible.height - 16)
+        return NSSize(width: min(max(fitting.width, 280), maxWidth),
+                      height: min(max(fitting.height, 120), maxHeight))
     }
 
     private func positionPanel() {
         guard let button = statusItem.button, let bwin = button.window else { return }
         let bframe = bwin.convertToScreen(button.convert(button.bounds, to: nil))
         let screen = bwin.screen ?? NSScreen.main
-        let visible = screen?.visibleFrame ?? .zero
-        var x = bframe.midX - panel.frame.width / 2
-        x = min(max(x, visible.minX + 8), visible.maxX - panel.frame.width - 8)
-        let y = bframe.minY - panel.frame.height - 4
+        let visible = screen?.visibleFrame ?? panelVisibleFrame()
+        let margin: CGFloat = 8
+        let minX = visible.minX + margin
+        let maxX = max(minX, visible.maxX - panel.frame.width - margin)
+        let x = min(max(bframe.midX - panel.frame.width / 2, minX), maxX)
+        let minY = visible.minY + margin
+        let maxY = max(minY, visible.maxY - panel.frame.height - margin)
+        let y = min(max(bframe.minY - panel.frame.height - 4, minY), maxY)
         panel.setFrameOrigin(NSPoint(x: x, y: y))
     }
 
@@ -288,6 +319,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         win.title = "Claude Dash"
         win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         win.isReleasedWhenClosed = false
+        // `syncBoardGeometry()` below applies the current zoom-aware minimum
+        // once the restored/default frame is in place.
         win.minSize = NSSize(width: 400, height: 320)
         win.level = Prefs.boardFloats ? .floating : .normal
         if !win.setFrameUsingName("ClaudeDashBoardWindow") {
@@ -313,6 +346,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         boardWindow = win
+        syncBoardGeometry()
         Prefs.boardWasOpen = true
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
@@ -320,6 +354,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await model.refreshAll() }
         model.refreshClaudeCode()
         model.refreshCodex()
+    }
+
+    /// Board cards need a larger minimum usable area at larger zoom levels.
+    /// Keep that minimum inside the current display and clamp restored frames
+    /// back onscreen, so a scale change never leaves an unreachable window.
+    private func syncBoardGeometry() {
+        guard let win = boardWindow else { return }
+        let visible = (win.screen ?? NSScreen.main)?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 800, height: 600)
+        let margin: CGFloat = 12
+        let maximum = NSSize(width: max(1, visible.width - margin * 2),
+                             height: max(1, visible.height - margin * 2))
+        let scale = CGFloat(Prefs.boardTextScale)
+        let desiredMinimum = NSSize(width: 400 * scale, height: 320 * scale)
+        let minimum = NSSize(width: min(desiredMinimum.width, maximum.width),
+                             height: min(desiredMinimum.height, maximum.height))
+        win.minSize = minimum
+
+        let current = win.contentView?.bounds.size ?? win.contentLayoutRect.size
+        let target = NSSize(width: min(max(current.width, minimum.width), maximum.width),
+                            height: min(max(current.height, minimum.height), maximum.height))
+        if abs(current.width - target.width) > 1 || abs(current.height - target.height) > 1 {
+            win.setContentSize(target)
+        }
+        clampBoardWindow(win, to: visible, margin: margin)
+    }
+
+    private func clampBoardWindow(_ win: NSWindow, to visible: NSRect, margin: CGFloat = 8) {
+        let frame = win.frame
+        let minX = visible.minX + margin
+        let maxX = max(minX, visible.maxX - frame.width - margin)
+        let minY = visible.minY + margin
+        let maxY = max(minY, visible.maxY - frame.height - margin)
+        win.setFrameOrigin(NSPoint(x: min(max(frame.origin.x, minX), maxX),
+                                   y: min(max(frame.origin.y, minY), maxY)))
     }
 
     private func toggleBoardWindow() {
@@ -377,6 +446,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editItem.submenu = edit
+
+        // View — native menu key equivalents make ⌘+/⌘−/⌘0 work in the
+        // focused dashboard without registering any global shortcut.
+        let viewItem = NSMenuItem(); main.addItem(viewItem)
+        let view = NSMenu(title: "View")
+        let zoomIn = NSMenuItem(title: "Zoom In", action: #selector(zoomIn(_:)), keyEquivalent: "+")
+        zoomIn.keyEquivalentModifierMask = [.command]
+        zoomIn.target = self
+        view.addItem(zoomIn)
+        let zoomOut = NSMenuItem(title: "Zoom Out", action: #selector(zoomOut(_:)), keyEquivalent: "-")
+        zoomOut.keyEquivalentModifierMask = [.command]
+        zoomOut.target = self
+        view.addItem(zoomOut)
+        let actualSize = NSMenuItem(title: "Actual Size", action: #selector(actualSize(_:)), keyEquivalent: "0")
+        actualSize.keyEquivalentModifierMask = [.command]
+        actualSize.target = self
+        view.addItem(actualSize)
+        viewItem.submenu = view
 
         let windowItem = NSMenuItem(); main.addItem(windowItem)
         let window = NSMenu(title: "Window")
@@ -458,6 +545,104 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func refreshNow() { Task { await model.userRefresh() } }
     @objc private func addAccountMenu() { showAddAccount() }
     @objc private func openPreferences() { showPreferences() }
+
+    // MARK: Dashboard zoom
+
+    /// Command shortcuts live in the View menu, so they remain app-local and
+    /// continue to work while a note's text editor owns first responder.
+    @objc private func zoomIn(_ sender: Any?) { adjustZoom(.increase) }
+    @objc private func zoomOut(_ sender: Any?) { adjustZoom(.decrease) }
+    @objc private func actualSize(_ sender: Any?) { adjustZoom(.reset) }
+
+    private func activeDashboardSurface() -> (surface: ZoomSurface, window: NSWindow)? {
+        if let boardWindow, boardWindow.isKeyWindow || NSApp.keyWindow === boardWindow {
+            return (.board, boardWindow)
+        }
+        if panel.isVisible, panel.isKeyWindow || NSApp.keyWindow === panel {
+            return (.quickGlance, panel)
+        }
+        return nil
+    }
+
+    private func adjustZoom(_ direction: DashboardZoom.Direction) {
+        guard let active = activeDashboardSurface() else { return }
+        switch active.surface {
+        case .quickGlance:
+            let next = DashboardZoom.adjusted(Prefs.quickGlanceTextScale,
+                                              direction: direction,
+                                              default: DashboardZoom.quickGlanceDefault)
+            guard next != Prefs.quickGlanceTextScale else { return }
+            Prefs.quickGlanceTextScale = next
+        case .board:
+            let next = DashboardZoom.adjusted(Prefs.boardTextScale,
+                                              direction: direction,
+                                              default: DashboardZoom.boardDefault)
+            guard next != Prefs.boardTextScale else { return }
+            Prefs.boardTextScale = next
+        }
+        // Both roots observe this model. Publish once so Preferences, a visible
+        // panel, and a visible board redraw in the same run-loop turn.
+        model.objectWillChange.send()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.syncBoardGeometry()
+            self.resizePanelIfNeeded()
+        }
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(zoomIn(_:)), #selector(zoomOut(_:)), #selector(actualSize(_:)):
+            return activeDashboardSurface() != nil
+        default:
+            return true
+        }
+    }
+
+    /// The requested Option aliases are deliberately a local event monitor:
+    /// they only see events delivered to Claude Dash, and never register a
+    /// system-wide hotkey. Option+Shift is allowed for the physical `+` key on
+    /// layouts where plus requires Shift. Any text editor wins so Option input
+    /// (including non-US/Korean layouts and IME composition) is untouched.
+    private func installZoomShortcutMonitor() {
+        guard localZoomEventMonitor == nil else { return }
+        localZoomEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            // Move only value types across the MainActor boundary. `NSEvent`
+            // itself is intentionally non-Sendable in newer SDKs.
+            let keyCode = event.keyCode
+            let modifierFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask).rawValue
+            let consume = MainActor.assumeIsolated { [weak self] in
+                self?.handleOptionZoomShortcut(keyCode: keyCode, modifierFlags: modifierFlags) ?? false
+            }
+            return consume ? nil : event
+        }
+    }
+
+    private func handleOptionZoomShortcut(keyCode: UInt16, modifierFlags: UInt) -> Bool {
+        guard let active = activeDashboardSurface(), !isEditingText(in: active.window) else { return false }
+        let modifiers = NSEvent.ModifierFlags(rawValue: modifierFlags)
+        let allowed: NSEvent.ModifierFlags = [.option, .shift, .numericPad]
+        guard modifiers.contains(.option), modifiers.subtracting(allowed).isEmpty else { return false }
+        switch keyCode {
+        case UInt16(kVK_ANSI_Equal), UInt16(kVK_ANSI_KeypadPlus):
+            adjustZoom(.increase)
+            return true
+        case UInt16(kVK_ANSI_Minus), UInt16(kVK_ANSI_KeypadMinus):
+            adjustZoom(.decrease)
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func isEditingText(in window: NSWindow) -> Bool {
+        var responder = window.firstResponder
+        while let current = responder {
+            if current is NSTextView || current is NSTextField { return true }
+            responder = current.nextResponder
+        }
+        return false
+    }
 
     func hotkeyFired() { toggleBoardWindow() }
 

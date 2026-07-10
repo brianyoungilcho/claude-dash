@@ -62,8 +62,9 @@ MainActor.assumeIsolated {
         .environment(\.colorScheme, .dark)
         .background(Color(white: 0.12)), "\(out)/menubar-empty.png", scale: 4)
 
-    // The dashboard panel body (header + rows), light + dark — board flavor
-    // with notes, flags, and the Claude Code section.
+    // The dashboard panel body at its compact/default/largest zoom levels —
+    // verifies that the fixed header/footer geometry participates alongside
+    // the shared scaled cards, notes, and Claude Code section.
     let sampleNotes: [String: (String, Bool)] = [
         "a": ("- [x] ship v1.2\n- [ ] write release notes", false),
         "b": ("Waiting on legal review before publishing.", true),
@@ -81,19 +82,19 @@ MainActor.assumeIsolated {
         accountEmail: "you@example.com",
         snapshotAt: now.addingTimeInterval(-240))
 
-    func panel(_ scheme: ColorScheme) -> some View {
+    func panel(_ scheme: ColorScheme, zoom s: CGFloat = 1.0) -> some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Claude Dash").font(.system(size: 13, weight: .semibold))
+            HStack(spacing: 8 * s) {
+                Text("Claude Dash").font(.system(size: 13 * s, weight: .semibold))
                 Spacer()
-                Image(systemName: "macwindow")
-                Image(systemName: "gearshape")
-                Image(systemName: "arrow.clockwise")
-            }.padding(.horizontal, 12).padding(.vertical, 8)
+                Image(systemName: "macwindow").font(.system(size: 12 * s))
+                Image(systemName: "gearshape").font(.system(size: 12 * s))
+                Image(systemName: "arrow.clockwise").font(.system(size: 12 * s))
+            }.padding(.horizontal, 12 * s).padding(.vertical, 8 * s)
             Divider()
             NoteView(text: "Focus this week: launch + KBR sitemap fix",
                      placeholder: "Scratchpad…", onChange: { _ in })
-                .padding(.horizontal, 12).padding(.vertical, 8)
+                .padding(.horizontal, 12 * s).padding(.vertical, 8 * s)
             Divider()
             ForEach(accounts) { acct in
                 AccountRow(account: acct, state: usage[acct.id] ?? .unknown,
@@ -107,21 +108,25 @@ MainActor.assumeIsolated {
             CodexSection(usage: codexSample, noteText: "- [ ] port the CLI helper")
             Divider()
             HStack {
-                Text("Add account…").font(.system(size: 12)).foregroundStyle(.tint)
+                Text("Add account…").font(.system(size: 12 * s)).foregroundStyle(.tint)
                 Spacer()
-                Text("Updated 9:41 PM").font(.system(size: 10)).foregroundStyle(.secondary)
-            }.padding(.horizontal, 12).padding(.vertical, 7)
+                Text("Updated 9:41 PM").font(.system(size: 10 * s)).foregroundStyle(.secondary)
+            }.padding(.horizontal, 12 * s).padding(.vertical, 7 * s)
         }
-        .frame(width: 360)
+        .frame(width: 340 * s)
         .background(scheme == .dark ? Color(white: 0.13) : Color(white: 0.97))
         .environment(\.colorScheme, scheme)
+        .environment(\.dashScale, s)
     }
 
     render(panel(.light), "\(out)/panel-light.png", scale: 3)
     render(panel(.dark), "\(out)/panel-dark.png", scale: 3)
+    render(panel(.dark, zoom: 0.9), "\(out)/panel-90.png", scale: 2)
+    render(panel(.dark, zoom: 1.6), "\(out)/panel-160.png", scale: 2)
 
     // Board window at multiple widths — verifies the adaptive card grid and
-    // the text-scale environment (Large = 1.25).
+    // the zoom environment (the narrow/high-zoom case intentionally becomes
+    // one column while the wider case keeps a multi-card grid).
     func board(width: CGFloat, textScale: CGFloat) -> some View {
         BoardContent(accounts: accounts, usage: usage,
                      notes: {
@@ -140,9 +145,10 @@ MainActor.assumeIsolated {
             .background(Color(white: 0.14))
             .environment(\.colorScheme, .dark)
     }
-    render(board(width: 480, textScale: 1.25), "\(out)/board-narrow.png", scale: 2)
+    render(board(width: 520, textScale: 1.25), "\(out)/board-narrow.png", scale: 2)
     render(board(width: 900, textScale: 1.25), "\(out)/board-wide.png", scale: 2)
-    render(board(width: 1300, textScale: 1.5), "\(out)/board-xl.png", scale: 2)
+    render(board(width: 720, textScale: 1.6), "\(out)/board-160-narrow.png", scale: 2)
+    render(board(width: 1300, textScale: 1.6), "\(out)/board-xl.png", scale: 2)
 
     // Add-account sheet.
     render(AddAccountView(model: AppModel(), onDone: {})

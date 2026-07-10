@@ -1,5 +1,46 @@
 import Foundation
 
+/// The discrete dashboard zoom levels. Keeping the steps central makes menu
+/// actions, Preferences, and persisted values agree, while avoiding arbitrary
+/// values that can produce unusable card geometry.
+enum DashboardZoom {
+    static let levels: [Double] = [0.9, 1.0, 1.1, 1.25, 1.4, 1.6]
+    static let quickGlanceDefault = 1.0
+    static let boardDefault = 1.25
+
+    enum Direction { case increase, decrease, reset }
+
+    /// Coerce stale/hand-edited defaults to the closest supported step. A
+    /// previous release offered 150%; ties intentionally prefer the larger
+    /// value, so that setting becomes the nearby 160% option rather than an
+    /// unexpected reduction.
+    static func normalized(_ value: Double, default defaultValue: Double) -> Double {
+        guard value.isFinite, value > 0 else { return defaultValue }
+        return levels.min { lhs, rhs in
+            let left = abs(lhs - value), right = abs(rhs - value)
+            return left == right ? lhs > rhs : left < right
+        } ?? defaultValue
+    }
+
+    static func adjusted(_ value: Double, direction: Direction, default defaultValue: Double) -> Double {
+        let current = normalized(value, default: defaultValue)
+        switch direction {
+        case .reset:
+            return defaultValue
+        case .increase:
+            guard let index = levels.firstIndex(of: current) else { return defaultValue }
+            return levels[min(index + 1, levels.count - 1)]
+        case .decrease:
+            guard let index = levels.firstIndex(of: current) else { return defaultValue }
+            return levels[max(index - 1, 0)]
+        }
+    }
+
+    static func label(_ value: Double, default defaultValue: Double) -> String {
+        "\(Int((normalized(value, default: defaultValue) * 100).rounded()))%"
+    }
+}
+
 /// Typed access to user preferences. All values have sensible defaults so a
 /// fresh install needs no configuration.
 enum Prefs {
@@ -104,10 +145,38 @@ enum Prefs {
         set { d.set(newValue, forKey: "boardFloats") }
     }
 
-    /// Text/layout scale for the board window (popover is always 1.0).
+    /// Text/layout zoom for the Quick Glance popover. Kept separate from the
+    /// board because the compact popover and a resizable window are used at
+    /// different viewing distances.
+    static var quickGlanceTextScale: Double {
+        get {
+            guard d.object(forKey: "quickGlanceTextScale") != nil else {
+                return DashboardZoom.quickGlanceDefault
+            }
+            return DashboardZoom.normalized(d.double(forKey: "quickGlanceTextScale"),
+                                            default: DashboardZoom.quickGlanceDefault)
+        }
+        set {
+            d.set(DashboardZoom.normalized(newValue, default: DashboardZoom.quickGlanceDefault),
+                  forKey: "quickGlanceTextScale")
+        }
+    }
+
+    /// Text/layout zoom for the board window. This deliberately retains the
+    /// v1.5 key so a user's existing Standard/Large/X-Large choice carries
+    /// forward into the new zoom controls.
     static var boardTextScale: Double {
-        get { let v = d.double(forKey: "boardTextScale"); return v >= 1.0 ? v : 1.25 }
-        set { d.set(newValue, forKey: "boardTextScale") }
+        get {
+            guard d.object(forKey: "boardTextScale") != nil else {
+                return DashboardZoom.boardDefault
+            }
+            return DashboardZoom.normalized(d.double(forKey: "boardTextScale"),
+                                            default: DashboardZoom.boardDefault)
+        }
+        set {
+            d.set(DashboardZoom.normalized(newValue, default: DashboardZoom.boardDefault),
+                  forKey: "boardTextScale")
+        }
     }
 
 }

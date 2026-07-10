@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The board window: a real, resizable macOS window where accounts become
-/// cards in an adaptive grid, rendered at the user's preferred text scale.
+/// cards in an adaptive grid, rendered at the user's preferred zoom level.
 /// `BoardContent` is pure props so the preview harness can render it without
 /// an AppModel.
 
@@ -36,13 +36,13 @@ struct BoardContent: View {
     @Environment(\.dashScale) private var s
 
     private var cardColumns: [GridItem] {
-        [GridItem(.adaptive(minimum: 340 * s, maximum: 560 * s), spacing: 12, alignment: .top)]
+        [GridItem(.adaptive(minimum: 340 * s, maximum: 560 * s), spacing: 12 * s, alignment: .top)]
     }
 
     var body: some View {
         VStack(spacing: 0) {
             header
-                .padding(.horizontal, 16).padding(.vertical, 10)
+                .padding(.horizontal, 16 * s).padding(.vertical, 10 * s)
             Divider()
             if accounts.isEmpty && codex == nil && ccSessions.isEmpty {
                 EmptyAccountsView(onAdd: onAdd)
@@ -53,16 +53,16 @@ struct BoardContent: View {
                 grid
             }
         }
-        .frame(minWidth: 400, minHeight: 320)
+        .frame(minWidth: 400 * s, minHeight: 320 * s)
     }
 
     private var grid: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 12 * s) {
             NoteView(text: notes.global,
                      placeholder: "Scratchpad — what's going on across everything…",
                      onChange: globalNoteChanged,
                      onCommit: noteCommitted)
-            LazyVGrid(columns: cardColumns, alignment: .leading, spacing: 12) {
+            LazyVGrid(columns: cardColumns, alignment: .leading, spacing: 12 * s) {
                 ForEach(accounts) { account in
                     card {
                         AccountRow(
@@ -94,27 +94,35 @@ struct BoardContent: View {
                 }
             }
         }
-        .padding(16)
+        .padding(16 * s)
     }
 
     private func card<V: View>(@ViewBuilder _ content: () -> V) -> some View {
         content()
             .frame(maxWidth: .infinity, alignment: .topLeading)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.045)))
+            .background(RoundedRectangle(cornerRadius: 10 * s).fill(Color.primary.opacity(0.045)))
     }
 
     private var header: some View {
-        HStack {
-            Button("Add account…", action: onAdd).controlSize(.regular)
+        HStack(spacing: 8 * s) {
+            Button(action: onAdd) {
+                Text("Add account…").font(.system(size: 12 * s))
+            }.controlSize(s >= 1.4 ? .large : .regular)
             Spacer()
             UpdatedFooterText(lastRefresh: lastRefresh, tick: displayTick)
-            Button(action: onPrefs) { Image(systemName: "gearshape") }
+            Button(action: onPrefs) {
+                Image(systemName: "gearshape").font(.system(size: 12 * s))
+            }
                 .buttonStyle(.borderless).help("Settings")
             if isRefreshing {
-                ProgressView().controlSize(.small).frame(width: 20)
+                ProgressView().controlSize(s >= 1.4 ? .regular : .small)
+                    .frame(width: 20 * s, height: 20 * s)
             } else {
-                Button(action: onRefresh) { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.borderless).help("Refresh all").frame(width: 20)
+                Button(action: onRefresh) {
+                    Image(systemName: "arrow.clockwise").font(.system(size: 12 * s))
+                }
+                    .buttonStyle(.borderless).help("Refresh all")
+                    .frame(width: 20 * s, height: 20 * s)
             }
         }
     }

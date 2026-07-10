@@ -406,7 +406,27 @@ check("auth rewritten AFTER the snapshot (login switch) → suppress the label",
 check("no auth mtime available → trust (best effort, no crash)",
       CodexMonitor.labelAppliesToSnapshot(authModified: nil, snapshotAt: t0))
 
-print("== 10. LIVE claude.ai endpoint — invalid key must map cleanly ==")
+print("== 12. Dashboard zoom levels and legacy normalization ==")
+check("zoom levels are ascending", DashboardZoom.levels == DashboardZoom.levels.sorted())
+check("Quick Glance starts at 100%", DashboardZoom.quickGlanceDefault == 1.0)
+check("Board starts at 125%", DashboardZoom.boardDefault == 1.25)
+check("zoom in advances one discrete level",
+      DashboardZoom.adjusted(1.0, direction: .increase, default: DashboardZoom.quickGlanceDefault) == 1.1)
+check("zoom out advances one discrete level",
+      DashboardZoom.adjusted(1.25, direction: .decrease, default: DashboardZoom.boardDefault) == 1.1)
+check("zoom clamps at the largest supported level",
+      DashboardZoom.adjusted(1.6, direction: .increase, default: DashboardZoom.boardDefault) == 1.6)
+check("zoom clamps at the smallest supported level",
+      DashboardZoom.adjusted(0.9, direction: .decrease, default: DashboardZoom.quickGlanceDefault) == 0.9)
+check("actual size restores each surface's own default",
+      DashboardZoom.adjusted(1.6, direction: .reset, default: DashboardZoom.boardDefault) == 1.25
+      && DashboardZoom.adjusted(0.9, direction: .reset, default: DashboardZoom.quickGlanceDefault) == 1.0)
+check("legacy 150% board setting migrates upward to 160%",
+      DashboardZoom.normalized(1.5, default: DashboardZoom.boardDefault) == 1.6)
+check("invalid persisted scale uses the surface default",
+      DashboardZoom.normalized(0, default: DashboardZoom.quickGlanceDefault) == 1.0)
+
+print("== 13. LIVE claude.ai endpoint — invalid key must map cleanly ==")
 if onCI {
     print("  SKIP  (datacenter IPs may be WAF-blocked; run locally)")
     print("\n== RESULT: \(failures == 0 ? "ALL PASS" : "\(failures) FAILURE(S)") ==")

@@ -56,7 +56,7 @@ in the right browser profile.
 - **Tests**:
   ```bash
   mkdir -p .build
-  swiftc -swift-version 5 -o .build/tests Tests/main.swift Sources/Core.swift Sources/Notes.swift Sources/ClaudeCode.swift Sources/Codex.swift && ./.build/tests
+  swiftc -swift-version 5 -o .build/tests Tests/main.swift Sources/Core.swift Sources/Prefs.swift Sources/Notes.swift Sources/ClaudeCode.swift Sources/Codex.swift && ./.build/tests
   ```
   The live-endpoint and browser-profile checks self-skip when `$CI` is set.
 - **View renders** (design review without launching the app):

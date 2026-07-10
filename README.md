@@ -19,12 +19,15 @@ at a glance, one click to open claude.ai in the right browser profile.
   session pace would hit the limit before the reset.
 - **Board window** — a real, standalone macOS window (⌃⌥⌘D, or the window
   button in the popover): accounts as side-by-side cards, **larger text**
-  (Standard/Large/X-Large in Preferences), per-account **notes** (`- [ ] task`
+  (independent 90–160% zoom in Preferences), per-account **notes** (`- [ ] task`
   lines become checkboxes; click away, press Esc, or ⌘⏎ to finish and save),
   a global scratchpad, and a manual **attention flag** per account that also
   lights a dot in the menu bar. Resizable, remembers its frame, optional
   always-on-top, reopens at launch if you had it open. Standard shortcuts work
   (⌘R refresh, ⌘N add account, ⌘B board, ⌘, settings, ⌘C/⌘V in fields).
+- **Dashboard zoom** — Quick Glance and Board each remember their own text and
+  layout size. With either dashboard focused, use **⌘+**, **⌘−**, or **⌘0**;
+  **⌥+** and **⌥−** are also available when you are not editing a note.
 - **Signals** — each account shows its **recent claude.ai conversations**
   (last 48 hours only — no stale noise; click one to open it in the right
   profile). Opt into the bundled Claude Code hooks (Preferences → Install)
@@ -121,7 +124,8 @@ The menu-bar popover stays as the compact quick glance:
 Gear icon in the dashboard (or right-click → Settings…, ⌘,): refresh interval,
 account sort order (added / most headroom / most used), menu-bar display mode,
 used-vs-remaining labels, notification threshold + reset alerts,
-launch-at-login, hotkey, board float behavior and text size, the
+launch-at-login, hotkey, board float behavior, separate Quick Glance and Board
+zoom levels, the
 conversations toggle, and the optional Claude Code hooks (installed by
 merging into `~/.claude/settings.json` with a backup; removable from the
 same place — the Claude Code section only exists while hooks are installed).
@@ -175,7 +179,7 @@ Login Items**, if one remains.
 | `Sources/Views.swift` | SwiftUI: dashboard, metric rows, add/edit sheets, preferences |
 | `Sources/Prefs.swift` | Typed UserDefaults settings |
 | `Sources/WebSignIn.swift` | In-app claude.ai login window (isolated cookie store) |
-| `Sources/Board.swift` | Standalone board window: adaptive card grid at the user's text scale |
+| `Sources/Board.swift` | Standalone board window: adaptive card grid at the user's zoom level |
 | `Sources/main.swift` | App bootstrap, floating panel, menu bar, hotkey, update check |
 | `build.sh` | Universal (arm64+x86_64) build + bundle + ad-hoc sign |
 | `Tests/main.swift` | Headless tests (CI-safe; live-endpoint check runs locally) |
@@ -185,7 +189,7 @@ Login Items**, if one remains.
 mkdir -p .build
 
 # run tests
-swiftc -swift-version 5 -o .build/tests Tests/main.swift Sources/Core.swift Sources/Notes.swift Sources/ClaudeCode.swift Sources/Codex.swift && ./.build/tests
+swiftc -swift-version 5 -o .build/tests Tests/main.swift Sources/Core.swift Sources/Prefs.swift Sources/Notes.swift Sources/ClaudeCode.swift Sources/Codex.swift && ./.build/tests
 
 # render the views to PNGs (Preview has its own main.swift, so exclude Sources/main.swift)
 swiftc -swift-version 5 -o .build/preview Preview/main.swift \
