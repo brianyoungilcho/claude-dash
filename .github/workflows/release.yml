@@ -5,9 +5,9 @@ on:
     tags: ["v*"]
 
 # A release is intentionally staged: tests and a full bundle verification run
-# before a draft is created; the signed feed is deployed before that draft is
-# made public. A failed Pages deployment leaves a safe draft rather than a
-# published app pointing at an unavailable or unsigned feed.
+# before a draft is created. The release asset is made public before the signed
+# feed is deployed, so clients can never discover an update whose download is
+# still private. A failed Pages deploy leaves a safe manual-download release.
 permissions:
   contents: write
 
@@ -68,6 +68,11 @@ jobs:
             echo "enabled=false" >> "$GITHUB_OUTPUT"
             echo "::warning::Sparkle keys are not configured; publishing a manual-update fallback release."
           elif [ -n "$public" ] && [ -n "$private" ]; then
+            derived="$(./Scripts/derive-sparkle-public-key.swift)"
+            if [ "$derived" != "$public" ]; then
+              echo "SPARKLE_PUBLIC_ED_KEY does not match SPARKLE_PRIVATE_ED_KEY." >&2
+              exit 1
+            fi
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
             echo "SPARKLE_PUBLIC_ED_KEY and SPARKLE_PRIVATE_ED_KEY must be configured together." >&2
@@ -87,6 +92,7 @@ jobs:
       - name: Verify release bundle
         env:
           CLAUDE_DASH_REQUIRE_SPARKLE: ${{ steps.mode.outputs.enabled == 'true' && '1' || '0' }}
+          EXPECTED_SPARKLE_PUBLIC_ED_KEY: ${{ steps.mode.outputs.enabled == 'true' && vars.SPARKLE_PUBLIC_ED_KEY || '' }}
         run: ./Scripts/verify-sparkle-bundle.sh "${RUNNER_TEMP}/Claude Dash.app"
       - name: Create release archive
         id: archive
@@ -128,11 +134,23 @@ jobs:
               --download-url-prefix "$download_prefix" \
               --link "https://github.com/brianyoungilcho/claude-dash" \
               --maximum-versions 3 --maximum-deltas 0 \
-              -o appcast.xml "$updates"
+              -o "$updates/appcast.xml" "$updates"
 
           grep -Fq "<sparkle:version>${version}</sparkle:version>" "$updates/appcast.xml"
-          grep -Fq 'sparkle:edSignature=' "$updates/appcast.xml"
           grep -Fq "${download_prefix}/Claude-Dash-${version}.zip" "$updates/appcast.xml"
+          archive_url="${download_prefix}/Claude-Dash-${version}.zip"
+          archive_signature="$(ruby -r rexml/document -r rexml/xpath -e '
+            doc = REXML::Document.new(File.read(ARGV[0]))
+            node = REXML::XPath.match(doc, "//enclosure").find { |item| item.attributes["url"] == ARGV[1] }
+            signature = node && node.attributes["sparkle:edSignature"].to_s
+            abort "no matching signed enclosure" if signature.nil? || signature.empty?
+            puts signature
+          ' "$updates/appcast.xml" "$archive_url")"
+          printf '%s' "$SPARKLE_PRIVATE_ED_KEY" | \
+            ./Vendor/Sparkle/bin/sign_update --verify --ed-key-file - \
+              "$updates/${{ steps.archive.outputs.name }}" "$archive_signature"
+          printf '%s' "$SPARKLE_PRIVATE_ED_KEY" | \
+            ./Vendor/Sparkle/bin/sign_update --verify --ed-key-file - "$updates/appcast.xml"
           cp "$updates/appcast.xml" "$pages/appcast.xml"
       - name: Upload signed appcast for Pages
         if: steps.mode.outputs.enabled == 'true'
@@ -154,40 +172,12 @@ jobs:
               "${{ steps.archive.outputs.path }}#${{ steps.archive.outputs.name }}" --clobber
           else
             gh release create "$GITHUB_REF_NAME" "${{ steps.archive.outputs.path }}#${{ steps.archive.outputs.name }}" \
-              --draft --title "Claude Dash $GITHUB_REF_NAME" --generate-notes
+              --draft --title "Claude Dash $GITHUB_REF_NAME" --generate-notes \
+              --notes "**First install:** unzip and move Claude Dash.app into /Applications. This build is ad-hoc signed, not notarized; see the README for the source-build and Gatekeeper-safe manual paths. Existing Sparkle-enabled installs update inside the app."
           fi
 
-  deploy_pages:
-    needs: package
-    if: needs.package.outputs.sparkle_enabled == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Download signed appcast
-        uses: actions/download-artifact@v4
-        with:
-          name: sparkle-appcast
-          path: _site
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
-      - name: Deploy signed appcast
-        id: deployment
-        uses: actions/deploy-pages@v4
-
   publish:
-    needs: [package, deploy_pages]
-    if: >-
-      always() && needs.package.result == 'success' &&
-      (needs.deploy_pages.result == 'success' || needs.deploy_pages.result == 'skipped')
+    needs: package
     runs-on: macos-14
     permissions:
       contents: write
@@ -234,3 +224,29 @@ jobs:
             git commit -m "claude-dash ${version}"
             git push
           fi
+
+  deploy_pages:
+    needs: [package, publish]
+    if: needs.package.outputs.sparkle_enabled == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Download signed appcast
+        uses: actions/download-artifact@v4
+        with:
+          name: sparkle-appcast
+          path: _site
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - name: Deploy signed appcast
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -18,6 +18,7 @@ valid_distribution() {
   [[ -x "$dir/bin/generate_appcast" ]] || return 1
   [[ -x "$dir/bin/sign_update" ]] || return 1
   [[ -f "$info" ]] || return 1
+  /usr/bin/codesign --verify --deep --strict "$framework" >/dev/null 2>&1 || return 1
 
   local found_version arches
   found_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info" 2>/dev/null || true)"

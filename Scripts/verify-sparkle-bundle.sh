@@ -43,6 +43,10 @@ fi
 [[ "$feed_url" == https://* ]] || {
   echo "SUFeedURL must be an HTTPS URL" >&2; exit 1
 }
+if [[ -n "${EXPECTED_SPARKLE_PUBLIC_ED_KEY:-}" && "$public_key" != "$EXPECTED_SPARKLE_PUBLIC_ED_KEY" ]]; then
+  echo "Embedded SUPublicEDKey does not match the configured release key" >&2
+  exit 1
+fi
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :SURequireSignedFeed' "$PLIST")" == "true" ]] || {
   echo "Sparkle release must require a signed appcast" >&2; exit 1
 }

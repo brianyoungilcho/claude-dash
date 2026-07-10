@@ -116,11 +116,14 @@ Pushing a `v*` tag now performs this order:
 1. Bootstrap Sparkle, run the headless tests, build a universal candidate, and
    verify its bundle/signature invariants.
 2. In the protected `sparkle-release` environment, rebuild and make a zip.
-3. Pipe the private key only to `generate_appcast` on stdin. It signs the zip
-   entry and appcast; the workflow does not put the key in an argument or file.
-4. Create a **draft** GitHub release, deploy the signed appcast through GitHub
-   Pages, then publish the draft only after Pages succeeds.
-5. Update the Homebrew cask as before.
+3. Verify the configured public/private key pair, then pipe the private key to
+   `generate_appcast` on stdin. It signs the zip entry and appcast; the workflow
+   does not put the key in an argument or file.
+4. Create a **draft** GitHub release, attach the archive, then publish it so the
+   download exists before any client can discover the update.
+5. Deploy the signed appcast through GitHub Pages. If Pages fails, the release
+   remains available through the existing manual update path without advertising
+   a broken in-app download. The Homebrew cask is updated as before.
 
 If neither Sparkle key has been configured, releases keep working but build in
 manual GitHub-release fallback mode. If only one key is configured, the
