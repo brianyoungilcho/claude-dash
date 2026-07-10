@@ -532,7 +532,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let parts = model.accounts.prefix(4).map { a -> String in
             switch model.usage[a.id] {
             case .ok(let u): return "\(a.displayName) \(Int(u.session?.utilization ?? 0))%"
-            case .unauthorized: return "\(a.displayName) key expired"
+            case .stale(let u, let problem):
+                return "\(a.displayName) \(Int(u.session?.utilization ?? 0))% — \(problem.needsSignIn ? "sign-in needed" : "retrying")"
+            case .problem(let problem):
+                return "\(a.displayName) \(problem.needsSignIn ? "sign-in needed" : "retrying")"
             default: return "\(a.displayName) —"
             }
         }

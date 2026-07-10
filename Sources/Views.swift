@@ -315,6 +315,36 @@ struct UpdatedFooterText: View {
     }
 }
 
+/// A multi-account outage is materially different from a bad individual
+/// credential. This stays local and user-driven: opening the status page does
+/// not add background polling or send any account data.
+struct UsageProblemBanner: View {
+    var problem: UsageProblem
+    @Environment(\.dashScale) private var s
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6 * s) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11 * s)).foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2 * s) {
+                Text(problem.display).font(.system(size: 11 * s, weight: .medium))
+                Text("Your stored sign-ins were not changed.")
+                    .font(.system(size: 10 * s)).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 4)
+            Button("Status") {
+                NSWorkspace.shared.open(URL(string: "https://status.claude.com/")!)
+            }
+            .buttonStyle(.borderless)
+            .font(.system(size: 10 * s, weight: .medium))
+        }
+        .padding(8 * s)
+        .background(RoundedRectangle(cornerRadius: 6 * s).fill(Color.orange.opacity(0.09)))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Claude usage may be temporarily unavailable across accounts")
+    }
+}
+
 /// Refresh button that shows a spinner and disables itself while in flight.
 struct RefreshButton: View {
     @ObservedObject var model: AppModel
@@ -351,6 +381,11 @@ struct DashboardView: View {
             } else {
                 ScrollView {
                     VStack(spacing: 0) {
+                        if let problem = model.globalUsageProblem {
+                            UsageProblemBanner(problem: problem)
+                                .padding(.horizontal, 12).padding(.vertical, 8)
+                            Divider()
+                        }
                         globalNote
                         Divider()
                         let visible = model.sortedAccounts
@@ -364,6 +399,7 @@ struct DashboardView: View {
                                 open: { model.openChrome(account, path: "/new") },
                                 openUsage: { model.openChrome(account, path: "/settings/usage") },
                                 edit: { onEdit(account) },
+                                retry: { Task { _ = await model.refresh(account, force: true) } },
                                 remove: { onRemove(account) },
                                 toggleFlag: { model.toggleFlag(accountId: account.id) },
                                 noteChanged: { model.setNote(accountId: account.id, text: $0) },
@@ -440,6 +476,7 @@ struct AccountRow: View {
     var open: () -> Void
     var openUsage: () -> Void
     var edit: () -> Void
+    var retry: () -> Void = {}
     var remove: () -> Void
     var toggleFlag: () -> Void = {}
     var noteChanged: (String) -> Void = { _ in }
@@ -451,8 +488,7 @@ struct AccountRow: View {
     /// Some limit is at 100% — nothing to act on here until a reset. A manual
     /// attention flag wins over the dim: the user explicitly pinned focus here.
     private var capped: Bool {
-        if case .ok(let u) = state { return u.anyLimitCapped }
-        return false
+        state.snapshot?.anyLimitCapped ?? false
     }
 
     var body: some View {
@@ -525,9 +561,9 @@ struct AccountRow: View {
         case .ok(let u):
             return "session \(Int(u.session?.utilization ?? 0)) percent used"
                 + (u.anyLimitCapped ? ", limit reached" : "")
-        case .unauthorized: return "session key expired"
-        case .rateLimited: return "rate limited"
-        case .error: return "unavailable"
+        case .stale(let u, let problem):
+            return "session \(Int(u.session?.utilization ?? 0)) percent used, \(problem.display)"
+        case .problem(let problem): return problem.display
         case .loading, .unknown: return "loading"
         }
     }
@@ -535,52 +571,75 @@ struct AccountRow: View {
     @ViewBuilder private var content: some View {
         switch state {
         case .ok(let u):
-            let session = u.session?.utilization ?? 0
-            VStack(alignment: .leading, spacing: 4 * s) {
-                // Session — the primary metric, full-size bar.
-                HStack {
-                    Text("Session").font(.system(size: 10 * s)).foregroundStyle(.secondary)
-                    Spacer()
-                    Text(resetString(u.session?.resetsAt))
-                        .font(.system(size: 9 * s)).foregroundStyle(.secondary)
-                    Text(Prefs.pctLabel(session))
-                        .font(.system(size: 10 * s, weight: .semibold)).monospacedDigit()
-                        .foregroundStyle(usageColor(session))
-                }
-                UsageBar(pct: session)
-                if let cap = u.projectedCap {
-                    Label("At this pace, caps \(cap.formatted(date: .omitted, time: .shortened))",
-                          systemImage: "speedometer")
-                        .font(.system(size: 9 * s)).foregroundStyle(.orange)
-                }
-                // Weekly + per-model caps (e.g. Fable) — compact aligned lines.
-                if let weekly = u.weekly {
-                    MetricLine(label: "Weekly", metric: weekly)
-                }
-                ForEach(Array(u.scoped.enumerated()), id: \.offset) { _, s in
-                    MetricLine(label: s.name, metric: s.metric)
-                }
-                if let extra = u.extra {
-                    MetricLine(label: "Extra",
-                               metric: UsageMetric(utilization: extra.percent, resetsAt: nil),
-                               trailing: extra.usedDisplay ?? "")
-                }
+            usageMetrics(u)
+        case .stale(let u, let problem):
+            VStack(alignment: .leading, spacing: 5 * s) {
+                usageMetrics(u)
+                problemLine(problem)
             }
         case .loading, .unknown:
             HStack(spacing: 6) {
                 ProgressView().controlSize(.small)
                 Text("Loading…").font(.system(size: 11 * s)).foregroundStyle(.secondary)
             }.frame(height: 20 * s)
-        case .unauthorized:
-            Button(action: edit) {
-                Label("Session key expired — replace", systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11 * s))
-            }.buttonStyle(.borderless).foregroundStyle(.red)
-        case .rateLimited:
-            Text("Rate limited — retrying soon").font(.system(size: 11 * s)).foregroundStyle(.orange)
-        case .error(let m):
-            Text(m).font(.system(size: 10 * s)).foregroundStyle(.secondary).lineLimit(2)
+        case .problem(let problem):
+            problemLine(problem)
         }
+    }
+
+    @ViewBuilder private func usageMetrics(_ u: AccountUsage) -> some View {
+        let session = u.session?.utilization ?? 0
+        VStack(alignment: .leading, spacing: 4 * s) {
+            // Session — the primary metric, full-size bar.
+            HStack {
+                Text("Session").font(.system(size: 10 * s)).foregroundStyle(.secondary)
+                Spacer()
+                Text(resetString(u.session?.resetsAt))
+                    .font(.system(size: 9 * s)).foregroundStyle(.secondary)
+                Text(Prefs.pctLabel(session))
+                    .font(.system(size: 10 * s, weight: .semibold)).monospacedDigit()
+                    .foregroundStyle(usageColor(session))
+            }
+            UsageBar(pct: session)
+            if let cap = u.projectedCap {
+                Label("At this pace, caps \(cap.formatted(date: .omitted, time: .shortened))",
+                      systemImage: "speedometer")
+                    .font(.system(size: 9 * s)).foregroundStyle(.orange)
+            }
+            // Weekly + per-model caps (e.g. Fable) — compact aligned lines.
+            if let weekly = u.weekly {
+                MetricLine(label: "Weekly", metric: weekly)
+            }
+            ForEach(Array(u.scoped.enumerated()), id: \.offset) { _, scope in
+                MetricLine(label: scope.name, metric: scope.metric)
+            }
+            if let extra = u.extra {
+                MetricLine(label: "Extra",
+                           metric: UsageMetric(utilization: extra.percent, resetsAt: nil),
+                           trailing: extra.usedDisplay ?? "")
+            }
+        }
+    }
+
+    @ViewBuilder private func problemLine(_ problem: UsageProblem) -> some View {
+        HStack(spacing: 5 * s) {
+            Image(systemName: problem.needsSignIn ? "exclamationmark.triangle.fill" : "arrow.clockwise")
+                .font(.system(size: 10 * s, weight: .semibold))
+            Text(problem.display)
+                .font(.system(size: 10 * s))
+                .lineLimit(2)
+            if problem.needsSignIn {
+                Button("Sign in again", action: edit)
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 10 * s, weight: .medium))
+            } else if problem.isTransient || problem == .accessDenied {
+                Button("Retry", action: retry)
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 10 * s, weight: .medium))
+            }
+        }
+        .foregroundStyle(problem.needsSignIn ? Color.red : problem.isTransient ? Color.orange : Color.secondary)
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder private var statusBadge: some View {
@@ -594,9 +653,14 @@ struct AccountRow: View {
             } else {
                 Circle().fill(usageColor(five)).frame(width: 7 * s, height: 7 * s)
             }
-        case .unauthorized:
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 9 * s)).foregroundStyle(.red)
+        case .stale(_, let problem):
+            Image(systemName: problem.needsSignIn ? "exclamationmark.triangle.fill" : "arrow.clockwise")
+                .font(.system(size: 9 * s))
+                .foregroundStyle(problem.needsSignIn ? Color.red : Color.orange)
+        case .problem(let problem):
+            Image(systemName: problem.needsSignIn ? "exclamationmark.triangle.fill" : "arrow.clockwise")
+                .font(.system(size: 9 * s))
+                .foregroundStyle(problem.needsSignIn ? Color.red : Color.orange)
         default:
             EmptyView()
         }
@@ -802,8 +866,7 @@ struct MenuBarGaugesView: View {
     }
 
     private func pct(_ a: Account) -> Double? {
-        if case .ok(let u) = usage[a.id] { return u.session?.utilization }
-        return nil
+        usage[a.id]?.snapshot?.session?.utilization
     }
 
     @ViewBuilder private func chip(_ a: Account) -> some View {
@@ -815,9 +878,16 @@ struct MenuBarGaugesView: View {
             case .ok(let u):
                 let pct = u.session?.utilization ?? 0
                 miniBar(pct)
-            case .unauthorized:
-                // Distinct from a 100%-full red bar so an expired key can't be
-                // mistaken for maxed-out usage.
+            case .stale(let u, let problem):
+                if problem.needsSignIn {
+                    Image(systemName: "exclamationmark").font(.system(size: 7, weight: .bold))
+                        .foregroundStyle(.red).frame(height: 3)
+                } else {
+                    miniBar(u.session?.utilization ?? 0).opacity(0.55)
+                }
+            case .problem(let problem) where problem.needsSignIn:
+                // Distinct from a 100%-full red bar so a confirmed sign-in
+                // problem cannot be mistaken for maxed-out usage.
                 Image(systemName: "exclamationmark").font(.system(size: 7, weight: .bold))
                     .foregroundStyle(.red).frame(height: 3)
             default:

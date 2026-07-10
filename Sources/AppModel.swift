@@ -8,6 +8,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var accounts: [Account] = []
     @Published private(set) var usage: [String: UsageState] = [:]   // by account id
     @Published private(set) var lastRefresh: Date?
+    /// A conservative, cross-account warning. It only appears when every
+    /// configured account fails in the same refresh cycle for a reason that
+    /// could plausibly be an upstream Claude/service problem.
+    @Published private(set) var globalUsageProblem: UsageProblem?
     /// Bumped once a minute so reset countdowns stay live between polls.
     @Published private(set) var displayTick = 0
     /// Board layer: notes and Claude Code sessions.
@@ -30,6 +34,12 @@ final class AppModel: ObservableObject {
     // Bumped when an account's key changes or it's removed, so an in-flight
     // fetch started under the old key/config can't overwrite fresh state.
     private var fetchEpoch: [String: Int] = [:]
+    /// Prevent a timer, wake event, and a manual refresh from racing the same
+    /// account. Each fetch owns its entry until its result is applied.
+    private var inFlightFetches: Set<String> = []
+    private var failureCounts: [String: Int] = [:]
+    private var authenticationFailureCounts: [String: Int] = [:]
+    private var retryNotBefore: [String: Date] = [:]
     // Last (utilization, time) sample per account, for burn-rate projection.
     private var lastSample: [String: (util: Double, at: Date)] = [:]
     private var notesSaveTask: Task<Void, Never>?
@@ -60,7 +70,7 @@ final class AppModel: ObservableObject {
     /// Anything anywhere that needs the user: manual flag, dead key, or a
     /// Claude Code session waiting for input.
     var anyAttention: Bool {
-        accounts.contains { isFlagged($0.id) || usage[$0.id] == .unauthorized }
+        accounts.contains { isFlagged($0.id) || (usage[$0.id]?.usageProblem?.needsSignIn ?? false) }
             || ccSessions.contains(where: \.waiting)
     }
 
@@ -104,8 +114,7 @@ final class AppModel: ObservableObject {
     }
 
     private func sessionPct(_ a: Account) -> Double? {
-        if case .ok(let u) = usage[a.id] { return u.session?.utilization }
-        return nil
+        usage[a.id]?.snapshot?.session?.utilization
     }
 
     // MARK: Persistence (config only; keys are in the Keychain)
@@ -139,9 +148,9 @@ final class AppModel: ObservableObject {
         persist()
         if stored {
             usage[id] = .unknown
-            Task { await refresh(acct) }
+            Task { _ = await refresh(acct) }
         } else {
-            usage[id] = .error("Couldn't save the key to the Keychain — try Edit → replace key")
+            usage[id] = .problem(.keychainUnavailable)
         }
     }
 
@@ -158,12 +167,12 @@ final class AppModel: ObservableObject {
             fetchEpoch[id, default: 0] += 1   // invalidate in-flight fetches with the old key
             notifiedThreshold.remove(id)
             guard Keychain.set(key, account: id) else {
-                usage[id] = .error("Couldn't save the key to the Keychain — try again")
+                usage[id] = .problem(.keychainUnavailable)
                 return
             }
             usage[id] = .unknown
         }
-        Task { await refresh(accounts[idx]) }
+        Task { _ = await refresh(accounts[idx], force: true) }
     }
 
     /// Swap two accounts' positions in the persisted order. Callers compute the
@@ -184,6 +193,10 @@ final class AppModel: ObservableObject {
         notifiedThreshold.remove(account.id)
         cappedAwaitingReset.remove(account.id)
         lastSample[account.id] = nil
+        inFlightFetches.remove(account.id)
+        failureCounts[account.id] = nil
+        authenticationFailureCounts[account.id] = nil
+        retryNotBefore[account.id] = nil
         notes.accounts[account.id] = nil
         scheduleNotesSave()
         persist()
@@ -191,49 +204,165 @@ final class AppModel: ObservableObject {
 
     // MARK: Fetching
 
-    func refreshAll() async {
-        await withTaskGroup(of: Void.self) { group in
-            for a in accounts { group.addTask { await self.refresh(a) } }
+    enum FetchOutcome {
+        case success(String)
+        case problem(String, UsageProblem)
+        case skipped
+    }
+
+    func refreshAll(force: Bool = false) async {
+        let refreshAccounts = accounts
+        let outcomes = await withTaskGroup(of: FetchOutcome.self, returning: [FetchOutcome].self) { group in
+            for account in refreshAccounts {
+                group.addTask { await self.refresh(account, force: force) }
+            }
+            var results: [FetchOutcome] = []
+            for await outcome in group { results.append(outcome) }
+            return results
         }
+        updateGlobalUsageProblem(outcomes, expectedAccountCount: refreshAccounts.count)
         // lastRefresh advances inside each successful fetch — a total outage
         // must not keep stamping the footer with fresh-looking times.
     }
 
-    func refresh(_ account: Account) async {
+    /// Fetch one account, retaining its last known usage when a request fails.
+    /// A credential is only labelled as needing sign-in after a second,
+    /// independent explicit invalid-authorization response.
+    @discardableResult
+    func refresh(_ account: Account, force: Bool = false) async -> FetchOutcome {
         let accountId = account.id
-        let epoch = fetchEpoch[accountId, default: 0]
-        guard let key = await Task.detached(operation: { Keychain.get(account: accountId) }).value else {
-            usage[accountId] = .unauthorized; return
+        let now = Date()
+        if !force, let retryAt = retryNotBefore[accountId], retryAt > now { return .skipped }
+        // Respect a server-requested delay even for the Refresh button.
+        if force, case .rateLimited(let retryAt?) = usage[accountId]?.usageProblem, retryAt > now {
+            return .skipped
         }
+        guard !inFlightFetches.contains(accountId) else { return .skipped }
+        inFlightFetches.insert(accountId)
+        defer { inFlightFetches.remove(accountId) }
+
+        let epoch = fetchEpoch[accountId, default: 0]
+        let credential = await Task.detached(operation: { Keychain.read(account: accountId) }).value
+        guard fetchEpoch[accountId, default: 0] == epoch,
+              accounts.contains(where: { $0.id == accountId }) else { return .skipped }
+        switch credential {
+        case .missing:
+            let problem = UsageProblem.credentialUnavailable
+            apply(problem: problem, accountId: accountId, previous: usage[accountId] ?? .unknown)
+            return .problem(accountId, problem)
+        case .unavailable:
+            let problem = UsageProblem.keychainUnavailable
+            apply(problem: problem, accountId: accountId, previous: usage[accountId] ?? .unknown)
+            return .problem(accountId, problem)
+        case .value(let key):
+            return await refresh(account, sessionKey: key, epoch: epoch)
+        }
+    }
+
+    private func refresh(_ account: Account, sessionKey key: String, epoch: Int) async -> FetchOutcome {
+        let accountId = account.id
         // Silent background refresh: keep showing known-good data during the
         // round-trip instead of collapsing every row to a spinner each poll.
         let previous = usage[accountId]
-        if case .ok = previous {} else { usage[accountId] = .loading }
+        if previous?.snapshot == nil, previous?.usageProblem == nil { usage[accountId] = .loading }
         do {
             var u = try await UsageAPI.usage(sessionKey: key, orgUuid: account.orgUuid)
             guard fetchEpoch[accountId, default: 0] == epoch,
-                  accounts.contains(where: { $0.id == accountId }) else { return }
+                  accounts.contains(where: { $0.id == accountId }) else { return .skipped }
             u.projectedCap = projectCap(accountId: accountId, usage: u)
             usage[accountId] = .ok(u)
+            failureCounts[accountId] = nil
+            authenticationFailureCounts[accountId] = nil
+            retryNotBefore[accountId] = nil
             lastRefresh = Date()
             maybeNotify(account, u)
+            return .success(accountId)
         } catch {
             guard fetchEpoch[accountId, default: 0] == epoch,
-                  accounts.contains(where: { $0.id == accountId }) else { return }
-            let e = error as? UsageError
-            if e == .unauthorized {
-                usage[accountId] = .unauthorized   // key death always surfaces
-            } else if case .ok = previous {
-                // Transient failure (network blip, 429, 5xx): keep the last
-                // good snapshot rather than replacing data with an error row.
-            } else {
-                switch e {
-                case .rateLimited: usage[accountId] = .rateLimited
-                case .some(let ue): usage[accountId] = .error(ue.display)
-                case .none: usage[accountId] = .error(error.localizedDescription)
-                }
-            }
+                  accounts.contains(where: { $0.id == accountId }) else { return .skipped }
+            let received = (error as? UsageError)?.problem ?? .network(.other)
+            let problem = confirmedProblem(received, accountId: accountId)
+            apply(problem: problem, accountId: accountId, previous: previous ?? .unknown)
+            scheduleRetry(problem, accountId: accountId)
+            return .problem(accountId, problem)
         }
+    }
+
+    private func confirmedProblem(_ problem: UsageProblem, accountId: String) -> UsageProblem {
+        guard problem == .signInRequired else {
+            authenticationFailureCounts[accountId] = nil
+            return problem
+        }
+        let failures = authenticationFailureCounts[accountId, default: 0] + 1
+        authenticationFailureCounts[accountId] = failures
+        return failures >= 2 ? .signInRequired : .signInCheck
+    }
+
+    private func apply(problem: UsageProblem, accountId: String, previous: UsageState) {
+        if let snapshot = previous.snapshot {
+            usage[accountId] = .stale(snapshot, problem)
+        } else {
+            usage[accountId] = .problem(problem)
+        }
+    }
+
+    private func scheduleRetry(_ problem: UsageProblem, accountId: String) {
+        guard problem.isTransient else {
+            retryNotBefore[accountId] = nil
+            failureCounts[accountId] = nil
+            return
+        }
+        let now = Date()
+        if case .rateLimited(let retryAt?) = problem {
+            retryNotBefore[accountId] = retryAt
+            return
+        }
+        let count = min(failureCounts[accountId, default: 0] + 1, 5)
+        failureCounts[accountId] = count
+        let delay = min(30.0 * pow(2, Double(count - 1)), 15 * 60)
+        retryNotBefore[accountId] = now.addingTimeInterval(delay)
+    }
+
+    private func updateGlobalUsageProblem(_ outcomes: [FetchOutcome], expectedAccountCount: Int) {
+        guard expectedAccountCount >= 2,
+              outcomes.count == expectedAccountCount,
+              !outcomes.contains(where: { if case .success = $0 { return true }; return false }),
+              !outcomes.contains(where: { if case .skipped = $0 { return true }; return false }) else {
+            if outcomes.contains(where: { if case .success = $0 { return true }; return false }) {
+                globalUsageProblem = nil
+            }
+            return
+        }
+        let problems = outcomes.compactMap { outcome -> (String, UsageProblem)? in
+            if case .problem(let id, let problem) = outcome { return (id, problem) }
+            return nil
+        }
+        guard problems.count == expectedAccountCount,
+              problems.allSatisfy({ isPlausiblyServiceWide($0.1) }) else {
+            globalUsageProblem = nil
+            return
+        }
+        globalUsageProblem = .temporary(status: nil)
+        // A simultaneous inconclusive auth response is not evidence that every
+        // stored key died. Keep the snapshot, but phrase it as an outage until
+        // a later independent confirmation is available.
+        for (id, problem) in problems where problem == .signInCheck || problem == .accessDenied {
+            replaceProblem(for: id, with: .temporary(status: nil))
+        }
+    }
+
+    private func isPlausiblyServiceWide(_ problem: UsageProblem) -> Bool {
+        switch problem {
+        case .signInCheck, .accessDenied, .rateLimited, .temporary, .network: return true
+        case .credentialUnavailable, .keychainUnavailable, .signInRequired,
+             .responseChanged, .noOrganizations: return false
+        }
+    }
+
+    private func replaceProblem(for accountId: String, with replacement: UsageProblem) {
+        guard let state = usage[accountId] else { return }
+        if let snapshot = state.snapshot { usage[accountId] = .stale(snapshot, replacement) }
+        else { usage[accountId] = .problem(replacement) }
     }
 
     /// User-initiated refresh: re-fetch everything visible. Guards against
@@ -241,7 +370,7 @@ final class AppModel: ObservableObject {
     func userRefresh() async {
         guard !isRefreshing else { return }
         isRefreshing = true
-        await refreshAll()
+        await refreshAll(force: true)
         refreshClaudeCode()
         refreshCodex()
         isRefreshing = false
