@@ -142,6 +142,11 @@ RC tags are published as GitHub prereleases, are never marked Latest, never
 bump Homebrew, and use `appcast-rc.xml`. Their numeric `CFBundleVersion` values
 increase from RC1 to RC2 while remaining below the final production build.
 Production tags use `appcast.xml` and reserve the higher final build number.
+Each successive RC and production tag must point to a distinct commit. GitHub
+Pages identifies a deployment by the source commit OID; reusing one commit for
+two tags can report a successful second deployment while retaining the first
+artifact. A release-notes-only commit is sufficient when the app source itself
+does not change between candidates.
 
 If neither Sparkle key has been configured, releases keep working but build in
 manual GitHub-release fallback mode. If only one key is configured, the
