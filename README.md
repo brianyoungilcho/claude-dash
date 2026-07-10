@@ -46,9 +46,10 @@ at a glance, one click to open claude.ai in the right browser profile.
   *organization*; pick the org when adding the account.
 - **Notifications** — configurable threshold alert, plus a "session reset —
   good to go" ping for capped accounts.
-- **One-click updates** — signed release builds can use **Check for Updates…
-  → Install and Relaunch**. Source builds and older releases retain the
-  GitHub-release/manual-upgrade path until the signed updater is configured.
+- **One-click updates** — signed release builds detect new versions in the
+  background and offer **Install and Relaunch**. Source builds and older
+  releases retain the GitHub-release/manual-upgrade path until the signed
+  updater is configured.
 - Keys live in the **macOS Keychain**, never on disk. Works with **Chrome,
   Brave, Edge, or Chromium** profiles. Global hotkey **⌃⌥⌘D**. Universal
   binary (Apple Silicon + Intel).
@@ -124,8 +125,10 @@ language I normally write in.
    with. Usage is verified live before saving, so a wrong pick fails loudly
    here, not silently later.
 
-Session keys rotate periodically. When one dies, the row turns red — **⋯ →
-Edit… → Sign in…** gets a fresh one in seconds.
+Session keys rotate periodically. A row only turns red after a known invalid
+authorization response is confirmed twice; network, rate-limit, Keychain, and
+service problems stay distinct and preserve the last-good usage. When sign-in
+really needs attention, **⋯ → Edit… → Sign in…** gets a fresh key in seconds.
 
 The menu-bar popover stays as the compact quick glance:
 
@@ -185,9 +188,10 @@ so new model caps appear automatically.
 
 **Disclaimer:** unofficial, community-built, not affiliated with Anthropic.
 The endpoint is internal and can change without notice — if every account
-errors at once, check for a newer release. Session keys grant full account
-access: they're stored only in your local Keychain and sent only to claude.ai.
-Use at your own risk.
+errors at once, use the in-app Claude Status link, then check for a newer
+release if the response shape changed. Session keys grant full account access:
+they're stored only in your local Keychain and sent only to claude.ai. Use at
+your own risk.
 
 More: [FAQ](FAQ.md) · [Uninstall](#uninstall) · [Development](#development)
 · [Signed updater setup](docs/UPDATER.md)
@@ -240,8 +244,8 @@ OUT=/tmp ./.build/preview
 
 CI builds and verifies the embedded universal framework plus the test suite on
 every push. Tagging `v*` runs those checks before creating a draft release;
-when the signed-updater keys are configured, it signs and deploys the appcast
-before publishing that release. See [the updater guide](docs/UPDATER.md).
+when signed-updater keys are configured, it verifies and publishes the archive
+before deploying the signed appcast. See [the updater guide](docs/UPDATER.md).
 
 **Roadmap / non-goals:** configurable hotkey is planned.
 Out of scope by design: local JSONL cost analytics (use

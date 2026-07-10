@@ -13,6 +13,7 @@ struct BoardContent: View {
     var ccByAccount: [String: [CCSession]] = [:]   // owner account id → sessions
     var codexAccounts: [CodexAccount] = [] // local, identity-keyed Codex cards
     var codexCurrentAccountID: String?
+    var globalUsageProblem: UsageProblem?
     var lastRefresh: Date?
     var displayTick: Int = 0
     var isRefreshing = false
@@ -21,6 +22,7 @@ struct BoardContent: View {
     var onEdit: (Account) -> Void = { _ in }
     var onPrefs: () -> Void = {}
     var onRefresh: () -> Void = {}
+    var retry: (Account) -> Void = { _ in }
     var open: (Account, String) -> Void = { _, _ in }
     var toggleFlag: (Account) -> Void = { _ in }
     var remove: (Account) -> Void = { _ in }
@@ -61,6 +63,9 @@ struct BoardContent: View {
 
     private var grid: some View {
         VStack(alignment: .leading, spacing: 12 * s) {
+            if let globalUsageProblem {
+                UsageProblemBanner(problem: globalUsageProblem)
+            }
             NoteView(text: notes.global,
                      placeholder: "Scratchpad — what's going on across everything…",
                      onChange: globalNoteChanged,
@@ -77,6 +82,7 @@ struct BoardContent: View {
                             open: { open(account, "/new") },
                             openUsage: { open(account, "/settings/usage") },
                             edit: { onEdit(account) },
+                            retry: { retry(account) },
                             remove: { remove(account) },
                             toggleFlag: { toggleFlag(account) },
                             noteChanged: { noteChanged(account, $0) },
@@ -153,6 +159,7 @@ struct BoardView: View {
             ccByAccount: model.ccOwnerAccountId.map { [$0: model.ccSessions] } ?? [:],
             codexAccounts: model.codexAccounts,
             codexCurrentAccountID: model.codexCurrentAccountID,
+            globalUsageProblem: model.globalUsageProblem,
             lastRefresh: model.lastRefresh,
             displayTick: model.displayTick,
             isRefreshing: model.isRefreshing,
@@ -160,6 +167,7 @@ struct BoardView: View {
             onEdit: onEdit,
             onPrefs: onPrefs,
             onRefresh: { Task { await model.userRefresh() } },
+            retry: { account in Task { _ = await model.refresh(account, force: true) } },
             open: { model.openChrome($0, path: $1) },
             toggleFlag: { model.toggleFlag(accountId: $0.id) },
             remove: onRemove,

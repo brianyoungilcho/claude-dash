@@ -407,7 +407,8 @@ struct DashboardView: View {
                     VStack(spacing: 0) {
                         if let problem = model.globalUsageProblem {
                             UsageProblemBanner(problem: problem)
-                                .padding(.horizontal, 12).padding(.vertical, 8)
+                                .padding(.horizontal, 12 * scale)
+                                .padding(.vertical, 8 * scale)
                             Divider()
                         }
                         globalNote
@@ -618,7 +619,7 @@ struct AccountRow: View {
                 problemLine(problem)
             }
         case .loading, .unknown:
-            HStack(spacing: 6 * s) {
+            HStack(alignment: .top, spacing: 6 * s) {
                 ProgressView().controlSize(s >= 1.4 ? .regular : .small)
                 Text("Loading…").font(.system(size: 11 * s)).foregroundStyle(.secondary)
             }.frame(height: 20 * s)
@@ -813,7 +814,10 @@ struct CodexSection: View {
                 Text("CODEX")
                     .font(.system(size: 9 * s, weight: .semibold)).foregroundStyle(.secondary)
                 Text(account.displayName)
-                    .font(.system(size: 11 * s, weight: .semibold)).lineLimit(1)
+                    .font(.system(size: 11 * s, weight: .semibold))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .layoutPriority(1)
                 if isCurrent {
                     Text("CURRENT")
                         .font(.system(size: 7 * s, weight: .semibold))
@@ -836,6 +840,9 @@ struct CodexSection: View {
                     Text(agoText(usage))
                         .font(.system(size: 8 * s))
                         .foregroundStyle(stale ? Color.orange : .secondary)
+                        .multilineTextAlignment(.trailing)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Menu {
                     Button("Rename…") {

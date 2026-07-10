@@ -180,6 +180,7 @@ struct CodexAccount: Codable, Equatable, Identifiable {
             return nickname
         }
         if let plan = planType?.trimmingCharacters(in: .whitespacesAndNewlines), !plan.isEmpty {
+            if ["free", "plus", "pro"].contains(plan.lowercased()) { return "Personal" }
             return plan.capitalized
         }
         return "Codex account"

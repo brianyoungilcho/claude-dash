@@ -475,6 +475,12 @@ let teamKey = CodexMonitor.accountKey(accountID: teamRawID)!
 let personalKey = CodexMonitor.accountKey(accountID: personalRawID)!
 check("same account id hashes deterministically", teamKey == CodexMonitor.accountKey(accountID: teamRawID))
 check("different account ids receive different local keys", teamKey != personalKey)
+check("consumer Codex plans default to a Personal label",
+      CodexAccount(id: personalKey, planType: "plus").displayName == "Personal"
+      && CodexAccount(id: personalKey, planType: "pro").displayName == "Personal"
+      && CodexAccount(id: personalKey, planType: "free").displayName == "Personal")
+check("Team remains a distinct default Codex label",
+      CodexAccount(id: teamKey, planType: "team").displayName == "Team")
 
 func registryUsage(_ pct: Double, at: Date, plan: String) -> CodexUsage {
     CodexUsage(windows: [CodexWindow(label: "monthly",
