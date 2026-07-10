@@ -18,11 +18,15 @@ first, then run:
 `xattr -dr com.apple.quarantine "/Applications/Claude Dash.app"`.
 Building from source (`./install.sh`) avoids this entirely.
 
-**Why does an account keep saying "session key expired"?**
-Session keys rotate. The fastest fix is the row's **⋯ → Edit… → Sign in…**
-button, which captures a fresh key automatically. If you copy cookies manually,
-reload claude.ai first and confirm you're logged in — a logged-out tab shows a
-stale cookie.
+**Why does an account say “sign-in needs attention” or “temporarily unavailable”?**
+Claude Dash no longer treats every HTTP/API failure as an expired session.
+Network errors, rate limits, service failures, ambiguous access denials, a
+locked Keychain, and a changed response shape each get their own recovery
+message while the last-good usage stays visible. A sign-in warning appears
+only after a known invalid-authorization response is independently confirmed;
+then **⋯ → Edit… → Sign in…** captures a fresh key. If several accounts fail
+together, Dash shows one service-level warning and links to
+[Claude Status](https://status.claude.com/) instead of declaring every key dead.
 
 **The Sign in… window rejects my Google login.**
 Some identity providers refuse embedded web views. Fall back to the manual
@@ -69,6 +73,34 @@ you wrote for it, and that can't be undone.
 Mac only. No cloud, no sync, nothing sent anywhere. Back the file up (or sync
 it yourself) if the notes matter.
 
+**Can I track Personal and TEAM Codex accounts at the same time?**
+Yes. Claude Dash keeps a separate local card, note, nickname, and last-known
+usage snapshot for every Codex account it safely observes. After switching the
+Codex login, it puts the current account first as a pending card; start a
+**new Codex task** and send one prompt to capture it. Codex's historical
+rollout files do not identify the account that wrote them, so Dash refuses to
+guess from an old task and risk showing TEAM usage as Personal (or vice versa).
+The other cards stay visible with their own “as of…” timestamp. The `…` menu
+can rename a card or forget its local cache and note; neither action changes
+anything in Codex. Codex writes `used_percent`; Dash labels each saved value
+explicitly as **used** or **left** based on your display setting. A snapshot
+older than an hour or past its reset warns that a new Codex prompt is needed,
+instead of claiming the cached number is live.
+
+**Why can Codex usage differ from the Codex UI?**
+Codex writes its local `used_percent` snapshot only after a turn. Dash now
+chooses the newest embedded `token_count` timestamp across recent task files
+(rather than trusting file modification order), labels the value explicitly as
+**used** or **left**, and warns after one hour or an elapsed reset. If Codex is
+showing a newer balance, send one prompt in the currently signed-in account;
+the card's “as of…” time should advance on the next local refresh.
+
+**Does Codex tracking store or send my OpenAI credentials?**
+No. It reads local rollout rate-limit snapshots plus non-secret display claims
+from the active `~/.codex/auth.json` JWT. OAuth/access/refresh tokens and the
+raw account id are never logged or persisted. The local Claude Dash cache uses
+only a hash-derived account key and has owner-only file permissions.
+
 **What do the Claude Code hooks actually do?**
 Optional (Preferences → Install). They add two entries to
 `~/.claude/settings.json` (a backup is written first) that append one JSON
@@ -91,4 +123,11 @@ conversations, so a busy account can legitimately show none.
 **Is this an official Anthropic app?**
 No — unofficial, community-built. It reads the same internal endpoint the
 claude.ai usage page uses, which can change without notice. If every account
-errors at once, check for a newer release.
+fails together, check Claude Status first; if the response format changed,
+check for a newer Claude Dash release.
+
+**Why not ask a local LLM to update the app?**
+An LLM can help repair a broken source install, but it should not be the trust
+mechanism for executable updates. Signed builds use Sparkle's Ed25519-verified
+feed and archive, then offer **Install and Relaunch**. The AI-assistant install
+prompt in the README remains the fallback when the app cannot update itself.

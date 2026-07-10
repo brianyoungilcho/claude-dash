@@ -19,18 +19,26 @@ at a glance, one click to open claude.ai in the right browser profile.
   session pace would hit the limit before the reset.
 - **Board window** — a real, standalone macOS window (⌃⌥⌘D, or the window
   button in the popover): accounts as side-by-side cards, **larger text**
-  (Standard/Large/X-Large in Preferences), per-account **notes** (`- [ ] task`
+  (independent 90–160% zoom in Preferences), per-account **notes** (`- [ ] task`
   lines become checkboxes; click away, press Esc, or ⌘⏎ to finish and save),
   a global scratchpad, and a manual **attention flag** per account that also
   lights a dot in the menu bar. Resizable, remembers its frame, optional
   always-on-top, reopens at launch if you had it open. Standard shortcuts work
   (⌘R refresh, ⌘N add account, ⌘B board, ⌘, settings, ⌘C/⌘V in fields).
+- **Dashboard zoom** — Quick Glance and Board each remember their own text and
+  layout size. With either dashboard focused, use **⌘+**, **⌘−**, or **⌘0**;
+  **⌥+** and **⌥−** are also available when you are not editing a note.
 - **Signals** — each account shows its **recent claude.ai conversations**
   (last 48 hours only — no stale noise; click one to open it in the right
   profile). Opt into the bundled Claude Code hooks (Preferences → Install)
   and a **Claude Code** section shows your local sessions, including
   *"waiting for your input."* Notes and signals are all local files; nothing
   leaves your Mac.
+- **Codex Personal + Team cards** — remembers each locally observed Codex
+  account separately, including its own last-known rate-limit snapshot, note,
+  nickname, and plan badge. Codex credentials are never stored, logged,
+  transmitted, or reused; Dash reads only local rollout snapshots and
+  non-secret display claims from `~/.codex`.
 - **In-app sign-in** — adding an account opens a claude.ai login window and
   captures the session key automatically; no DevTools digging. (Manual
   cookie-paste still works.)
@@ -38,6 +46,10 @@ at a glance, one click to open claude.ai in the right browser profile.
   *organization*; pick the org when adding the account.
 - **Notifications** — configurable threshold alert, plus a "session reset —
   good to go" ping for capped accounts.
+- **One-click updates** — signed release builds detect new versions in the
+  background and offer **Install and Relaunch**. Source builds and older
+  releases retain the GitHub-release/manual-upgrade path until the signed
+  updater is configured.
 - Keys live in the **macOS Keychain**, never on disk. Works with **Chrome,
   Brave, Edge, or Chromium** profiles. Global hotkey **⌃⌥⌘D**. Universal
   binary (Apple Silicon + Intel).
@@ -60,7 +72,11 @@ brew install --cask --no-quarantine brianyoungilcho/tap/claude-dash
 That's it: builds a universal binary into `/Applications/Claude Dash.app`,
 launches it, and registers it to start at login (once — disable it in
 System Settings or Preferences and your choice sticks). Local builds have no
-Gatekeeper friction. Upgrade with `git pull && ./install.sh`.
+Gatekeeper friction. Source checkouts can always upgrade with
+`git pull && ./install.sh`. On a signed-updater build, right-click the
+menu-bar icon → **Check for Updates…** → **Install and Relaunch** instead.
+The first signed-updater release still needs one manual install; older releases
+do not gain an updater retroactively.
 
 > **Prebuilt zip from [Releases](https://github.com/brianyoungilcho/claude-dash/releases)
 > instead?** The app is ad-hoc signed, not notarized, so "right-click → Open"
@@ -109,8 +125,10 @@ language I normally write in.
    with. Usage is verified live before saving, so a wrong pick fails loudly
    here, not silently later.
 
-Session keys rotate periodically. When one dies, the row turns red — **⋯ →
-Edit… → Sign in…** gets a fresh one in seconds.
+Session keys rotate periodically. A row only turns red after a known invalid
+authorization response is confirmed twice; network, rate-limit, Keychain, and
+service problems stay distinct and preserve the last-good usage. When sign-in
+really needs attention, **⋯ → Edit… → Sign in…** gets a fresh key in seconds.
 
 The menu-bar popover stays as the compact quick glance:
 
@@ -121,7 +139,8 @@ The menu-bar popover stays as the compact quick glance:
 Gear icon in the dashboard (or right-click → Settings…, ⌘,): refresh interval,
 account sort order (added / most headroom / most used), menu-bar display mode,
 used-vs-remaining labels, notification threshold + reset alerts,
-launch-at-login, hotkey, board float behavior and text size, the
+launch-at-login, hotkey, board float behavior, separate Quick Glance and Board
+zoom levels, the
 conversations toggle, and the optional Claude Code hooks (installed by
 merging into `~/.claude/settings.json` with a backup; removable from the
 same place — the Claude Code section only exists while hooks are installed).
@@ -129,6 +148,27 @@ same place — the Claude Code section only exists while hooks are installed).
 Notes are stored in
 `~/Library/Application Support/Claude Dash/notes.json` — plain JSON, local
 only, trivially backed up or synced with your own tooling.
+
+### Track Personal and Team Codex accounts
+
+Turn on **Show Codex usage** in Preferences (it is on by default). Claude Dash
+reads Codex's local rollout files only; it does not call an OpenAI endpoint or
+save an OAuth/access/refresh token.
+
+1. With TEAM signed in to Codex, make a normal Codex turn. Dash captures it as
+   the first remembered card.
+2. Switch Codex to Personal. Dash places Personal first as a pending card.
+3. Start a **new Codex task** and send one prompt. That gives Dash a safe,
+   attributable local snapshot for Personal while the TEAM card remains with
+   its honest “as of…” time.
+
+This new-task step is intentional: Codex's old rollout history has no stable
+account id, so Claude Dash never guesses that a late TEAM event belongs to a
+newly signed-in Personal account. Use the `…` menu on a Codex card to rename
+it (for example, “Personal” or “TEAM”) or forget its local cache and note.
+Codex records `used_percent`; each card explicitly says **used** or **left**
+according to your display preference and marks an old/reset snapshot as needing
+a new prompt rather than presenting it as a live remaining balance.
 
 Power-user overrides via `defaults` (browser selection):
 
@@ -148,11 +188,13 @@ so new model caps appear automatically.
 
 **Disclaimer:** unofficial, community-built, not affiliated with Anthropic.
 The endpoint is internal and can change without notice — if every account
-errors at once, check for a newer release. Session keys grant full account
-access: they're stored only in your local Keychain and sent only to claude.ai.
-Use at your own risk.
+errors at once, use the in-app Claude Status link, then check for a newer
+release if the response shape changed. Session keys grant full account access:
+they're stored only in your local Keychain and sent only to claude.ai. Use at
+your own risk.
 
 More: [FAQ](FAQ.md) · [Uninstall](#uninstall) · [Development](#development)
+· [Signed updater setup](docs/UPDATER.md)
 
 ## Uninstall
 
@@ -175,17 +217,23 @@ Login Items**, if one remains.
 | `Sources/Views.swift` | SwiftUI: dashboard, metric rows, add/edit sheets, preferences |
 | `Sources/Prefs.swift` | Typed UserDefaults settings |
 | `Sources/WebSignIn.swift` | In-app claude.ai login window (isolated cookie store) |
-| `Sources/Board.swift` | Standalone board window: adaptive card grid at the user's text scale |
+| `Sources/Board.swift` | Standalone board window: adaptive card grid at the user's zoom level |
+| `Sources/Codex.swift` | Local, identity-keyed Codex usage reader and cache |
+| `Sources/Updater.swift` | Sparkle standard updater bridge plus safe GitHub-release fallback |
 | `Sources/main.swift` | App bootstrap, floating panel, menu bar, hotkey, update check |
-| `build.sh` | Universal (arm64+x86_64) build + bundle + ad-hoc sign |
+| `build.sh` | Universal build, verified Sparkle embedding, nested signing, and bundle assembly |
+| `Scripts/bootstrap-sparkle.sh` | SHA-256-verified pinned Sparkle bootstrap |
+| `Scripts/release-metadata.sh` | Fail-closed production/RC version and feed mapping |
+| `docs/UPDATER.md` | Key, appcast, GitHub Pages, and release-owner instructions |
 | `Tests/main.swift` | Headless tests (CI-safe; live-endpoint check runs locally) |
 | `Preview/main.swift` | Renders the views to PNG for design review |
 
 ```bash
-mkdir -p .build
-
 # run tests
-swiftc -swift-version 5 -o .build/tests Tests/main.swift Sources/Core.swift Sources/Notes.swift Sources/ClaudeCode.swift Sources/Codex.swift && ./.build/tests
+./Scripts/test.sh
+
+# build to /Applications (downloads the pinned Sparkle framework if needed)
+./build.sh
 
 # render the views to PNGs (Preview has its own main.swift, so exclude Sources/main.swift)
 swiftc -swift-version 5 -o .build/preview Preview/main.swift \
@@ -195,8 +243,10 @@ swiftc -swift-version 5 -o .build/preview Preview/main.swift \
 OUT=/tmp ./.build/preview
 ```
 
-CI builds both architectures and runs the test suite on every push; tagging
-`v*` builds and publishes a release zip automatically.
+CI builds and verifies the embedded universal framework plus the test suite on
+every push. Tagging `v*` runs those checks before creating a draft release;
+when signed-updater keys are configured, it verifies and publishes the archive
+before deploying the signed appcast. See [the updater guide](docs/UPDATER.md).
 
 **Roadmap / non-goals:** configurable hotkey is planned.
 Out of scope by design: local JSONL cost analytics (use

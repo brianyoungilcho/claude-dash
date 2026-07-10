@@ -44,7 +44,7 @@ MainActor.assumeIsolated {
                               extra: ExtraUsage(percent: 22, usedDisplay: "4.40 USD used"),
                               fetchedAt: now,
                               projectedCap: now.addingTimeInterval(2700))),
-        "c": .unauthorized,
+        "c": .problem(.signInRequired),
         // A capped account — session at 100% dims the whole card.
         "d": .ok(AccountUsage(session: UsageMetric(utilization: 100, resetsAt: now.addingTimeInterval(3000)),
                               weekly: UsageMetric(utilization: 64, resetsAt: now.addingTimeInterval(400000)),
@@ -62,8 +62,9 @@ MainActor.assumeIsolated {
         .environment(\.colorScheme, .dark)
         .background(Color(white: 0.12)), "\(out)/menubar-empty.png", scale: 4)
 
-    // The dashboard panel body (header + rows), light + dark — board flavor
-    // with notes, flags, and the Claude Code section.
+    // The dashboard panel body at its compact/default/largest zoom levels —
+    // verifies that the fixed header/footer geometry participates alongside
+    // the shared scaled cards, notes, and Claude Code section.
     let sampleNotes: [String: (String, Bool)] = [
         "a": ("- [x] ship v1.2\n- [ ] write release notes", false),
         "b": ("Waiting on legal review before publishing.", true),
@@ -74,26 +75,35 @@ MainActor.assumeIsolated {
         CCSession(projectDisplay: "webapp", projectDir: "-u-webapp",
                   lastActivity: now.addingTimeInterval(-360), waiting: true),
     ]
-    let codexSample = CodexUsage(
+    let codexPersonalUsage = CodexUsage(
+        windows: [
+            CodexWindow(label: "5h", metric: UsageMetric(utilization: 12, resetsAt: now.addingTimeInterval(2 * 3600))),
+            CodexWindow(label: "weekly", metric: UsageMetric(utilization: 36, resetsAt: now.addingTimeInterval(4 * 86400))),
+        ], planType: "plus", accountEmail: nil, snapshotAt: now.addingTimeInterval(-120))
+    let codexTeamUsage = CodexUsage(
         windows: [CodexWindow(label: "monthly",
                               metric: UsageMetric(utilization: 57, resetsAt: now.addingTimeInterval(25 * 86400)))],
-        planType: "team",
-        accountEmail: "you@example.com",
-        snapshotAt: now.addingTimeInterval(-240))
+        planType: "team", accountEmail: nil, snapshotAt: now.addingTimeInterval(-240))
+    let codexAccounts = [
+        CodexAccount(id: "codex-personal-preview", nickname: "Personal", email: "you@example.com",
+                     planType: "plus", usage: codexPersonalUsage),
+        CodexAccount(id: "codex-team-preview", nickname: "TEAM", email: "you@example.com",
+                     planType: "team", usage: codexTeamUsage),
+    ]
 
-    func panel(_ scheme: ColorScheme) -> some View {
+    func panel(_ scheme: ColorScheme, zoom s: CGFloat = 1.0) -> some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Claude Dash").font(.system(size: 13, weight: .semibold))
+            HStack(spacing: 8 * s) {
+                Text("Claude Dash").font(.system(size: 13 * s, weight: .semibold))
                 Spacer()
-                Image(systemName: "macwindow")
-                Image(systemName: "gearshape")
-                Image(systemName: "arrow.clockwise")
-            }.padding(.horizontal, 12).padding(.vertical, 8)
+                Image(systemName: "macwindow").font(.system(size: 12 * s))
+                Image(systemName: "gearshape").font(.system(size: 12 * s))
+                Image(systemName: "arrow.clockwise").font(.system(size: 12 * s))
+            }.padding(.horizontal, 12 * s).padding(.vertical, 8 * s)
             Divider()
             NoteView(text: "Focus this week: launch + KBR sitemap fix",
                      placeholder: "Scratchpad…", onChange: { _ in })
-                .padding(.horizontal, 12).padding(.vertical, 8)
+                .padding(.horizontal, 12 * s).padding(.vertical, 8 * s)
             Divider()
             ForEach(accounts) { acct in
                 AccountRow(account: acct, state: usage[acct.id] ?? .unknown,
@@ -104,24 +114,53 @@ MainActor.assumeIsolated {
                            edit: {}, remove: {}, toggleFlag: {}, noteChanged: { _ in })
                 Divider()
             }
-            CodexSection(usage: codexSample, noteText: "- [ ] port the CLI helper")
-            Divider()
+            ForEach(codexAccounts) { account in
+                CodexSection(account: account, isCurrent: account.id == codexAccounts[0].id,
+                             noteText: "- [ ] port the CLI helper")
+                Divider()
+            }
             HStack {
-                Text("Add account…").font(.system(size: 12)).foregroundStyle(.tint)
+                Text("Add account…").font(.system(size: 12 * s)).foregroundStyle(.tint)
                 Spacer()
-                Text("Updated 9:41 PM").font(.system(size: 10)).foregroundStyle(.secondary)
-            }.padding(.horizontal, 12).padding(.vertical, 7)
+                Text("Updated 9:41 PM").font(.system(size: 10 * s)).foregroundStyle(.secondary)
+            }.padding(.horizontal, 12 * s).padding(.vertical, 7 * s)
         }
-        .frame(width: 360)
+        .frame(width: 340 * s)
         .background(scheme == .dark ? Color(white: 0.13) : Color(white: 0.97))
         .environment(\.colorScheme, scheme)
+        .environment(\.dashScale, s)
     }
 
     render(panel(.light), "\(out)/panel-light.png", scale: 3)
     render(panel(.dark), "\(out)/panel-dark.png", scale: 3)
+    render(panel(.dark, zoom: 0.9), "\(out)/panel-90.png", scale: 2)
+    render(panel(.dark, zoom: 1.6), "\(out)/panel-160.png", scale: 2)
+
+    // Account-switch safety state: no old rollout is attributed to a newly
+    // signed-in account until one new Codex task has produced a fresh file.
+    let pendingCodex = CodexAccount(id: "codex-pending-preview", nickname: "Personal",
+                                    email: "you@example.com", planType: "plus",
+                                    captureAfter: now)
+    render(CodexSection(account: pendingCodex, isCurrent: true,
+                        noteText: "- [ ] start a fresh task")
+        .frame(width: 360)
+        .padding(10)
+        .background(Color(white: 0.97)), "\(out)/codex-pending.png", scale: 3)
+
+    let staleCodexUsage = CodexUsage(
+        windows: [CodexWindow(label: "monthly",
+                              metric: UsageMetric(utilization: 57, resetsAt: now.addingTimeInterval(25 * 86400)))],
+        planType: "team", accountEmail: nil, snapshotAt: now.addingTimeInterval(-2 * 3600))
+    let staleCodex = CodexAccount(id: "codex-stale-preview", nickname: "TEAM",
+                                  email: "you@example.com", planType: "team", usage: staleCodexUsage)
+    render(CodexSection(account: staleCodex, noteText: "- [ ] refresh this snapshot")
+        .frame(width: 360)
+        .padding(10)
+        .background(Color(white: 0.97)), "\(out)/codex-stale.png", scale: 3)
 
     // Board window at multiple widths — verifies the adaptive card grid and
-    // the text-scale environment (Large = 1.25).
+    // the zoom environment (the narrow/high-zoom case intentionally becomes
+    // one column while the wider case keeps a multi-card grid).
     func board(width: CGFloat, textScale: CGFloat) -> some View {
         BoardContent(accounts: accounts, usage: usage,
                      notes: {
@@ -129,20 +168,23 @@ MainActor.assumeIsolated {
                          n.global = "Focus this week: launch + sitemap fix"
                          n.accounts["a"] = AccountNote(text: sampleNotes["a"]!.0, flagged: false)
                          n.accounts["b"] = AccountNote(text: sampleNotes["b"]!.0, flagged: true)
-                         n.accounts[NotesData.codexKey] = AccountNote(text: "- [ ] port the CLI helper")
+                         n.accounts[NotesData.codexKey(for: codexAccounts[0].id)] = AccountNote(text: "- [ ] personal Codex task")
+                         n.accounts[NotesData.codexKey(for: codexAccounts[1].id)] = AccountNote(text: "- [ ] team Codex task")
                          return n
                      }(),
                      ccSessions: [],
-                     ccByAccount: ["a": ccSessions], codex: codexSample, lastRefresh: now,
+                     ccByAccount: ["a": ccSessions], codexAccounts: codexAccounts,
+                     codexCurrentAccountID: codexAccounts[0].id, lastRefresh: now,
                      embedInScrollView: false)
             .environment(\.dashScale, textScale)
             .frame(width: width)
             .background(Color(white: 0.14))
             .environment(\.colorScheme, .dark)
     }
-    render(board(width: 480, textScale: 1.25), "\(out)/board-narrow.png", scale: 2)
+    render(board(width: 520, textScale: 1.25), "\(out)/board-narrow.png", scale: 2)
     render(board(width: 900, textScale: 1.25), "\(out)/board-wide.png", scale: 2)
-    render(board(width: 1300, textScale: 1.5), "\(out)/board-xl.png", scale: 2)
+    render(board(width: 720, textScale: 1.6), "\(out)/board-160-narrow.png", scale: 2)
+    render(board(width: 1300, textScale: 1.6), "\(out)/board-xl.png", scale: 2)
 
     // Add-account sheet.
     render(AddAccountView(model: AppModel(), onDone: {})

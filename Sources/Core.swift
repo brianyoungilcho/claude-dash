@@ -54,14 +54,81 @@ extension AccountUsage {
     }
 }
 
-/// The live state of a single account's usage fetch.
+/// The live state of a single account's usage fetch. A last-known snapshot and
+/// a problem deliberately coexist: an upstream hiccup must not erase useful
+/// numbers or masquerade as a dead credential.
 enum UsageState: Equatable {
     case unknown
     case loading
     case ok(AccountUsage)
-    case unauthorized      // expired / invalid session key
-    case rateLimited
-    case error(String)
+    case stale(AccountUsage, UsageProblem)
+    case problem(UsageProblem)
+
+    var snapshot: AccountUsage? {
+        switch self {
+        case .ok(let usage), .stale(let usage, _): return usage
+        case .unknown, .loading, .problem: return nil
+        }
+    }
+
+    var usageProblem: UsageProblem? {
+        switch self {
+        case .stale(_, let problem), .problem(let problem): return problem
+        case .unknown, .loading, .ok: return nil
+        }
+    }
+}
+
+enum NetworkProblem: Equatable {
+    case offline
+    case timedOut
+    case cancelled
+    case other
+}
+
+/// Recovery-oriented problems shown by the dashboard. These never contain a
+/// session key, raw response body, or a server-supplied error string.
+enum UsageProblem: Equatable {
+    case credentialUnavailable
+    case keychainUnavailable
+    case signInCheck
+    case signInRequired
+    case accessDenied
+    case rateLimited(Date?)
+    case temporary(status: Int?)
+    case network(NetworkProblem)
+    case responseChanged(status: Int?)
+    case noOrganizations
+
+    var needsSignIn: Bool { self == .signInRequired || self == .credentialUnavailable }
+
+    var isTransient: Bool {
+        switch self {
+        case .signInCheck, .rateLimited, .temporary, .network: return true
+        case .credentialUnavailable, .keychainUnavailable, .signInRequired,
+             .accessDenied, .responseChanged, .noOrganizations: return false
+        }
+    }
+
+    var display: String {
+        switch self {
+        case .credentialUnavailable: return "Stored sign-in unavailable"
+        case .keychainUnavailable: return "Couldn't read the macOS Keychain"
+        case .signInCheck: return "Claude couldn't verify this sign-in — retrying"
+        case .signInRequired: return "Claude sign-in needs attention"
+        case .accessDenied: return "Claude denied this usage request — this may be temporary"
+        case .rateLimited(let retryAt):
+            guard let retryAt else { return "Usage checks are rate limited — retrying soon" }
+            return "Usage checks are rate limited — retrying \(retryAt.formatted(date: .omitted, time: .shortened))"
+        case .temporary: return "Claude usage is temporarily unavailable"
+        case .network(.offline): return "Can't reach Claude — check your connection"
+        case .network(.timedOut): return "Claude usage request timed out"
+        case .network(.cancelled): return "Claude usage request was cancelled"
+        case .network(.other): return "Can't reach Claude right now"
+        case .responseChanged: return "Claude's usage response changed — check for an app update"
+        case .noOrganizations: return "No Claude workspace was found for this sign-in"
+        }
+    }
 }
 
 /// A configured account. Non-secret; the session key lives in the Keychain, keyed by `id`.
@@ -106,23 +173,27 @@ func updatedLabel(_ date: Date?, pollInterval: TimeInterval, now: Date = Date())
 }
 
 enum UsageError: Error, Equatable {
-    case unauthorized
-    case rateLimited
+    case signInRequired
+    case accessDenied
+    case rateLimited(Date?)
+    case temporary(status: Int?)
+    case network(NetworkProblem)
+    case responseChanged(status: Int?)
     case noOrganizations
-    case network(String)
-    case decoding(String)
-    case http(Int)
 
-    var display: String {
+    var problem: UsageProblem {
         switch self {
-        case .unauthorized:   return "Session key expired or invalid"
-        case .rateLimited:    return "Rate limited — try again shortly"
-        case .noOrganizations:return "No organizations for this key"
-        case .network(let m): return "Network error: \(m)"
-        case .decoding(let m):return "Unexpected response: \(m)"
-        case .http(let c):    return "HTTP \(c)"
+        case .signInRequired: return .signInRequired
+        case .accessDenied: return .accessDenied
+        case .rateLimited(let retryAt): return .rateLimited(retryAt)
+        case .temporary(let status): return .temporary(status: status)
+        case .network(let problem): return .network(problem)
+        case .responseChanged(let status): return .responseChanged(status: status)
+        case .noOrganizations: return .noOrganizations
         }
     }
+
+    var display: String { problem.display }
 }
 
 // MARK: - Keychain (session keys never touch disk in cleartext)
@@ -137,29 +208,39 @@ enum UsageError: Error, Equatable {
 enum Keychain {
     static let service = "com.claudedash.sessionkey"
 
+    enum ReadResult: Equatable {
+        case value(String)
+        case missing
+        case unavailable
+    }
+
     /// Run `security` with the given interactive-mode command fed via stdin
     /// (keeps secrets out of `ps`-visible argv). Returns (exitCode, stdout).
     @discardableResult
-    private static func security(stdinCommand: String? = nil, args: [String] = []) -> (Int32, String) {
+    private static func security(stdinCommand: String? = nil, args: [String] = []) -> (Int32, String, String) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/security")
         let out = Pipe()
+        let err = Pipe()
         p.standardOutput = out
-        p.standardError = Pipe()
+        p.standardError = err
         if let cmd = stdinCommand {
             p.arguments = ["-i"]
             let inPipe = Pipe()
             p.standardInput = inPipe
-            do { try p.run() } catch { return (-1, "") }
+            do { try p.run() } catch { return (-1, "", "") }
             inPipe.fileHandleForWriting.write(Data((cmd + "\n").utf8))
             inPipe.fileHandleForWriting.closeFile()
         } else {
             p.arguments = args
-            do { try p.run() } catch { return (-1, "") }
+            do { try p.run() } catch { return (-1, "", "") }
         }
         let data = out.fileHandleForReading.readDataToEndOfFile()
+        let error = err.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
-        return (p.terminationStatus, String(data: data, encoding: .utf8) ?? "")
+        return (p.terminationStatus,
+                String(data: data, encoding: .utf8) ?? "",
+                String(data: error, encoding: .utf8) ?? "")
     }
 
     @discardableResult
@@ -170,11 +251,25 @@ enum Keychain {
         return get(account: account) == value
     }
 
+    /// Distinguishes an absent item from a Keychain/tool failure. `security`
+    /// reports errSecItemNotFound as shell status 44 on current macOS; the
+    /// stderr fallback keeps this tolerant of wording/status changes.
+    static func read(account: String) -> ReadResult {
+        let (code, out, err) = security(args: ["find-generic-password", "-s", service, "-a", account, "-w"])
+        if code == 0 {
+            let value = out.trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? .missing : .value(value)
+        }
+        let lower = err.lowercased()
+        if code == 44 || lower.contains("could not be found") || lower.contains("item not found") {
+            return .missing
+        }
+        return .unavailable
+    }
+
     static func get(account: String) -> String? {
-        let (code, out) = security(args: ["find-generic-password", "-s", service, "-a", account, "-w"])
-        guard code == 0 else { return nil }
-        let value = out.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty ? nil : value
+        if case .value(let value) = read(account: account) { return value }
+        return nil
     }
 
     static func delete(account: String) {
@@ -279,13 +374,76 @@ enum UsageAPI {
     private static func run(_ req: URLRequest) async throws -> Data {
         let data: Data, resp: URLResponse
         do { (data, resp) = try await session.data(for: req) }
-        catch { throw UsageError.network(error.localizedDescription) }
-        guard let http = resp as? HTTPURLResponse else { throw UsageError.network("no response") }
-        switch http.statusCode {
-        case 200: return data
-        case 401, 403: throw UsageError.unauthorized
-        case 429: throw UsageError.rateLimited
-        default: throw UsageError.http(http.statusCode)
+        catch let error as URLError { throw UsageError.network(networkProblem(error)) }
+        catch { throw UsageError.network(.other) }
+        guard let http = resp as? HTTPURLResponse else { throw UsageError.network(.other) }
+        guard http.statusCode != 200 else { return data }
+        throw classifyHTTP(statusCode: http.statusCode,
+                           headers: headers(from: http),
+                           body: data)
+    }
+
+    /// Pure classification so fixtures can cover the unofficial endpoint without
+    /// putting a real session key on the network. Never returns raw server text.
+    static func classifyHTTP(statusCode: Int, headers: [String: String], body: Data,
+                             now: Date = Date()) -> UsageError {
+        let contentType = headers.first { $0.key.caseInsensitiveCompare("Content-Type") == .orderedSame }?.value.lowercased() ?? ""
+        let server = headers.first { $0.key.caseInsensitiveCompare("Server") == .orderedSame }?.value.lowercased() ?? ""
+        switch statusCode {
+        case 401:
+            return .signInRequired
+        case 403:
+            // A known invalid session currently returns JSON
+            // {error:{type:permission_error,message:"Invalid authorization"}}.
+            // Other 403s can be workspace, policy, WAF, or service failures.
+            if isExplicitInvalidAuthorization(body) { return .signInRequired }
+            if contentType.contains("text/html") || server.contains("cloudflare") {
+                return .temporary(status: statusCode)
+            }
+            return .accessDenied
+        case 429:
+            let retry = headers.first { $0.key.caseInsensitiveCompare("Retry-After") == .orderedSame }?.value
+            return .rateLimited(retryAfter(retry, now: now))
+        case 408, 500...599:
+            return .temporary(status: statusCode)
+        case 404:
+            return .accessDenied
+        case 400, 402, 405...499:
+            return .responseChanged(status: statusCode)
+        default:
+            return .responseChanged(status: statusCode)
+        }
+    }
+
+    private static func headers(from response: HTTPURLResponse) -> [String: String] {
+        response.allHeaderFields.reduce(into: [:]) { result, pair in
+            guard let key = pair.key as? String else { return }
+            result[key] = String(describing: pair.value)
+        }
+    }
+
+    private static func isExplicitInvalidAuthorization(_ data: Data) -> Bool {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let error = root["error"] as? [String: Any],
+              (error["type"] as? String)?.lowercased() == "permission_error",
+              let message = error["message"] as? String else { return false }
+        let normalized = message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "invalid authorization" || normalized == "invalid session" || normalized == "not authenticated"
+    }
+
+    private static func retryAfter(_ header: String?, now: Date) -> Date? {
+        guard let header = header?.trimmingCharacters(in: .whitespacesAndNewlines), !header.isEmpty else { return nil }
+        if let seconds = TimeInterval(header) { return now.addingTimeInterval(max(0, seconds)) }
+        return httpDate.date(from: header)
+    }
+
+    private static func networkProblem(_ error: URLError) -> NetworkProblem {
+        switch error.code {
+        case .notConnectedToInternet, .networkConnectionLost, .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed:
+            return .offline
+        case .timedOut: return .timedOut
+        case .cancelled: return .cancelled
+        default: return .other
         }
     }
 
@@ -293,7 +451,7 @@ enum UsageAPI {
     static func organizations(sessionKey: String) async throws -> [Org] {
         let data = try await run(request("/organizations", sessionKey: sessionKey))
         guard let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-            throw UsageError.decoding("organizations")
+            throw UsageError.responseChanged(status: nil)
         }
         let orgs = arr.compactMap { o -> Org? in
             guard let uuid = o["uuid"] as? String else { return nil }
@@ -309,7 +467,7 @@ enum UsageAPI {
     /// Fetch the 5-hour + 7-day usage for one organization.
     static func usage(sessionKey: String, orgUuid: String) async throws -> AccountUsage {
         let data = try await run(request("/organizations/\(orgUuid)/usage", sessionKey: sessionKey))
-        guard let u = decodeUsage(data) else { throw UsageError.decoding("usage") }
+        guard let u = decodeUsage(data) else { throw UsageError.responseChanged(status: nil) }
         return u
     }
 
@@ -390,6 +548,13 @@ enum UsageAPI {
     }()
     private static let iso: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime]; return f
+    }()
+    private static let httpDate: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss zzz"
+        return f
     }()
     private static func date(_ s: String) -> Date? { isoFrac.date(from: s) ?? iso.date(from: s) }
 }

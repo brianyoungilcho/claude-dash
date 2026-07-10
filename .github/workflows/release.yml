@@ -1,67 +1,336 @@
 name: Release
+
 on:
   push:
     tags: ["v*"]
 
+# A release is intentionally staged: tests and a full bundle verification run
+# before a draft is created. The release asset is made public before the signed
+# feed is deployed, so clients can never discover an update whose download is
+# still private. A failed Pages deploy leaves a safe manual-download release.
 permissions:
   contents: write
 
+concurrency:
+  # Appcast generation is a read-modify-sign-deploy operation. Serialize all
+  # tags so two releases cannot overwrite each other's feed entries.
+  group: claude-dash-release-feed
+  cancel-in-progress: false
+
 jobs:
-  release:
+  verify:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
-      - name: Build app bundle
-        run: CLAUDE_DASH_VERSION="${GITHUB_REF_NAME#v}" ./build.sh
-      - name: Zip
-        run: ditto -c -k --keepParent "/Applications/Claude Dash.app" "Claude-Dash-${GITHUB_REF_NAME#v}.zip"
-      - name: Create release
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Resolve release metadata
+        id: release_meta
+        run: ./Scripts/release-metadata.sh "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+      - name: Bootstrap pinned Sparkle framework
+        run: ./Scripts/bootstrap-sparkle.sh
+      - name: Run tests
+        run: ./Scripts/test.sh
+      - name: Build release candidate
         env:
-          GH_TOKEN: ${{ github.token }}
+          CLAUDE_DASH_APP_PATH: ${{ runner.temp }}/Claude Dash.app
+          SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
+          SPARKLE_FEED_URL: ${{ vars.SPARKLE_FEED_URL }}
+          SPARKLE_RC_FEED_URL: ${{ vars.SPARKLE_RC_FEED_URL }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "Claude-Dash-${GITHUB_REF_NAME#v}.zip" \
-            --title "Claude Dash $GITHUB_REF_NAME" --generate-notes \
-            --notes "**Install:** unzip, drag Claude Dash.app into /Applications, then run \`xattr -dr com.apple.quarantine \"/Applications/Claude Dash.app\"\` (the app is not notarized). Building from source avoids this — see the README."
+          set -euo pipefail
+          feed_url="${SPARKLE_FEED_URL:-https://brianyoungilcho.github.io/claude-dash/appcast.xml}"
+          if [ "${{ steps.release_meta.outputs.prerelease }}" = "true" ]; then
+            feed_url="${SPARKLE_RC_FEED_URL:-https://brianyoungilcho.github.io/claude-dash/appcast-rc.xml}"
+          fi
+          if [ -n "${SPARKLE_PUBLIC_ED_KEY:-}" ]; then
+            CLAUDE_DASH_REQUIRE_SPARKLE=1 \
+              CLAUDE_DASH_VERSION="${{ steps.release_meta.outputs.version }}" \
+              CLAUDE_DASH_BUILD_VERSION="${{ steps.release_meta.outputs.build_version }}" \
+              SPARKLE_FEED_URL="$feed_url" ./build.sh
+          else
+            CLAUDE_DASH_VERSION="${{ steps.release_meta.outputs.version }}" \
+              CLAUDE_DASH_BUILD_VERSION="${{ steps.release_meta.outputs.build_version }}" \
+              SPARKLE_FEED_URL="$feed_url" ./build.sh
+          fi
+      - name: Verify release candidate
+        env:
+          CLAUDE_DASH_REQUIRE_SPARKLE: ${{ vars.SPARKLE_PUBLIC_ED_KEY != '' && '1' || '0' }}
+        run: ./Scripts/verify-sparkle-bundle.sh "${RUNNER_TEMP}/Claude Dash.app"
+
+  package:
+    needs: verify
+    runs-on: macos-14
+    # The private Ed25519 key is only exposed to this protected environment.
+    environment: sparkle-release
+    outputs:
+      sparkle_enabled: ${{ steps.mode.outputs.enabled }}
+      prerelease: ${{ steps.release_meta.outputs.prerelease }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
+      SPARKLE_FEED_URL: ${{ vars.SPARKLE_FEED_URL }}
+      SPARKLE_RC_FEED_URL: ${{ vars.SPARKLE_RC_FEED_URL }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Resolve release metadata
+        id: release_meta
+        run: ./Scripts/release-metadata.sh "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+      - name: Bootstrap pinned Sparkle framework
+        run: ./Scripts/bootstrap-sparkle.sh
+      - name: Decide whether the signed updater is configured
+        id: mode
+        env:
+          SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+        run: |
+          set -euo pipefail
+          public="${SPARKLE_PUBLIC_ED_KEY:-}"
+          private="${SPARKLE_PRIVATE_ED_KEY:-}"
+          if [ -z "$public" ] && [ -z "$private" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Sparkle keys are not configured; publishing a manual-update fallback release."
+          elif [ -n "$public" ] && [ -n "$private" ]; then
+            derived="$(./Scripts/derive-sparkle-public-key.swift)"
+            if [ "$derived" != "$public" ]; then
+              echo "SPARKLE_PUBLIC_ED_KEY does not match SPARKLE_PRIVATE_ED_KEY." >&2
+              exit 1
+            fi
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "SPARKLE_PUBLIC_ED_KEY and SPARKLE_PRIVATE_ED_KEY must be configured together." >&2
+            exit 1
+          fi
+      - name: Build release bundle
+        env:
+          CLAUDE_DASH_APP_PATH: ${{ runner.temp }}/Claude Dash.app
+        run: |
+          set -euo pipefail
+          feed_url="${SPARKLE_FEED_URL:-https://brianyoungilcho.github.io/claude-dash/appcast.xml}"
+          if [ "${{ steps.release_meta.outputs.prerelease }}" = "true" ]; then
+            feed_url="${SPARKLE_RC_FEED_URL:-https://brianyoungilcho.github.io/claude-dash/appcast-rc.xml}"
+          fi
+          if [ "${{ steps.mode.outputs.enabled }}" = "true" ]; then
+            CLAUDE_DASH_REQUIRE_SPARKLE=1 \
+              CLAUDE_DASH_VERSION="${{ steps.release_meta.outputs.version }}" \
+              CLAUDE_DASH_BUILD_VERSION="${{ steps.release_meta.outputs.build_version }}" \
+              SPARKLE_FEED_URL="$feed_url" ./build.sh
+          else
+            CLAUDE_DASH_VERSION="${{ steps.release_meta.outputs.version }}" \
+              CLAUDE_DASH_BUILD_VERSION="${{ steps.release_meta.outputs.build_version }}" \
+              SPARKLE_FEED_URL="$feed_url" ./build.sh
+          fi
+      - name: Verify release bundle
+        env:
+          CLAUDE_DASH_REQUIRE_SPARKLE: ${{ steps.mode.outputs.enabled == 'true' && '1' || '0' }}
+          EXPECTED_SPARKLE_PUBLIC_ED_KEY: ${{ steps.mode.outputs.enabled == 'true' && vars.SPARKLE_PUBLIC_ED_KEY || '' }}
+        run: ./Scripts/verify-sparkle-bundle.sh "${RUNNER_TEMP}/Claude Dash.app"
+      - name: Create release archive
+        id: archive
+        run: |
+          set -euo pipefail
+          version="${{ steps.release_meta.outputs.version }}"
+          archive="${RUNNER_TEMP}/Claude-Dash-${version}.zip"
+          ditto -c -k --keepParent "${RUNNER_TEMP}/Claude Dash.app" "$archive"
+          echo "path=$archive" >> "$GITHUB_OUTPUT"
+          echo "name=Claude-Dash-${version}.zip" >> "$GITHUB_OUTPUT"
+      - name: Generate and verify signed appcast
+        if: steps.mode.outputs.enabled == 'true'
+        env:
+          SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+        run: |
+          set -euo pipefail
+          version="${{ steps.release_meta.outputs.version }}"
+          build_version="${{ steps.release_meta.outputs.build_version }}"
+          production_feed="${SPARKLE_FEED_URL:-https://brianyoungilcho.github.io/claude-dash/appcast.xml}"
+          rc_feed="${SPARKLE_RC_FEED_URL:-https://brianyoungilcho.github.io/claude-dash/appcast-rc.xml}"
+          if [ "${{ steps.release_meta.outputs.prerelease }}" = "true" ]; then
+            feed_url="$rc_feed"
+            companion_url="$production_feed"
+            companion_name="appcast.xml"
+          else
+            feed_url="$production_feed"
+            companion_url="$rc_feed"
+            companion_name="appcast-rc.xml"
+          fi
+          feed_name="${{ steps.release_meta.outputs.feed_filename }}"
+          download_prefix="https://github.com/brianyoungilcho/claude-dash/releases/download/${GITHUB_REF_NAME}"
+          updates="${RUNNER_TEMP}/sparkle-updates"
+          pages="${RUNNER_TEMP}/pages"
+          mkdir -p "$updates" "$pages"
+          cp "${{ steps.archive.outputs.path }}" "$updates/${{ steps.archive.outputs.name }}"
+
+          # Preserve prior entries when the public feed already exists. A
+          # network failure is not treated as a first-release 404, so it cannot
+          # silently wipe update history.
+          status="$(curl --silent --show-error --location --proto '=https' --tlsv1.2 \
+            --output "$updates/appcast.xml" --write-out '%{http_code}' "$feed_url" || true)"
+          case "$status" in
+            200)
+              # Never turn a compromised Pages document into a legitimately
+              # signed feed. Sparkle's generator parses prior XML but does not
+              # authenticate it, so verification must happen before reuse.
+              printf '%s' "$SPARKLE_PRIVATE_ED_KEY" | \
+                ./Vendor/Sparkle/bin/sign_update --verify --ed-key-file - "$updates/appcast.xml"
+              echo "Verified and reusing the current signed appcast."
+              ;;
+            404) rm -f "$updates/appcast.xml"; echo "No existing appcast yet (first Sparkle release)." ;;
+            *) echo "Unable to retrieve current appcast (HTTP ${status:-000}); refusing to replace it." >&2; exit 1 ;;
+          esac
+
+          # The key reaches Sparkle only through stdin, never a command-line
+          # argument or on-disk file. generate_appcast signs both archive items
+          # and the feed because the bundle sets SURequireSignedFeed=true.
+          printf '%s' "$SPARKLE_PRIVATE_ED_KEY" | \
+            ./Vendor/Sparkle/bin/generate_appcast --ed-key-file - \
+              --download-url-prefix "$download_prefix" \
+              --link "https://github.com/brianyoungilcho/claude-dash" \
+              --maximum-versions 3 --maximum-deltas 0 \
+              -o "$updates/appcast.xml" "$updates"
+
+          grep -Fq "<sparkle:version>${build_version}</sparkle:version>" "$updates/appcast.xml"
+          grep -Fq "${download_prefix}/Claude-Dash-${version}.zip" "$updates/appcast.xml"
+          archive_url="${download_prefix}/Claude-Dash-${version}.zip"
+          archive_signature="$(ruby -r rexml/document -r rexml/xpath -e '
+            doc = REXML::Document.new(File.read(ARGV[0]))
+            node = REXML::XPath.match(doc, "//enclosure").find { |item| item.attributes["url"] == ARGV[1] }
+            signature = node && node.attributes["sparkle:edSignature"].to_s
+            abort "no matching signed enclosure" if signature.nil? || signature.empty?
+            puts signature
+          ' "$updates/appcast.xml" "$archive_url")"
+          printf '%s' "$SPARKLE_PRIVATE_ED_KEY" | \
+            ./Vendor/Sparkle/bin/sign_update --verify --ed-key-file - \
+              "$updates/${{ steps.archive.outputs.name }}" "$archive_signature"
+          printf '%s' "$SPARKLE_PRIVATE_ED_KEY" | \
+            ./Vendor/Sparkle/bin/sign_update --verify --ed-key-file - "$updates/appcast.xml"
+          cp "$updates/appcast.xml" "$pages/$feed_name"
+
+          # A Pages deployment replaces the whole site. Preserve the other
+          # channel so publishing RCs cannot remove production updates (or the
+          # final release remove the RC feed during the upgrade test).
+          companion_status="$(curl --silent --show-error --location --proto '=https' --tlsv1.2 \
+            --output "$pages/$companion_name" --write-out '%{http_code}' "$companion_url" || true)"
+          case "$companion_status" in
+            200)
+              printf '%s' "$SPARKLE_PRIVATE_ED_KEY" | \
+                ./Vendor/Sparkle/bin/sign_update --verify --ed-key-file - "$pages/$companion_name"
+              echo "Verified and preserving companion feed $companion_name."
+              ;;
+            404) rm -f "$pages/$companion_name"; echo "No companion feed exists yet." ;;
+            *) echo "Unable to preserve companion feed (HTTP ${companion_status:-000})." >&2; exit 1 ;;
+          esac
+      - name: Upload signed appcast for Pages
+        if: steps.mode.outputs.enabled == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sparkle-appcast
+          path: ${{ runner.temp }}/pages
+          if-no-files-found: error
+          retention-days: 7
+      - name: Create draft GitHub release
+        run: |
+          set -euo pipefail
+          prerelease="${{ steps.release_meta.outputs.prerelease }}"
+          if draft="$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [ "$draft" != "true" ]; then
+              echo "Release $GITHUB_REF_NAME is already public; refusing to replace it." >&2
+              exit 1
+            fi
+            gh release upload "$GITHUB_REF_NAME" \
+              "${{ steps.archive.outputs.path }}#${{ steps.archive.outputs.name }}" --clobber
+            gh release edit "$GITHUB_REF_NAME" --prerelease="$prerelease" --latest=false
+          else
+            release_flags=(--draft --latest=false)
+            if [ "$prerelease" = "true" ]; then release_flags+=(--prerelease); fi
+            gh release create "$GITHUB_REF_NAME" "${{ steps.archive.outputs.path }}#${{ steps.archive.outputs.name }}" \
+              "${release_flags[@]}" --title "Claude Dash $GITHUB_REF_NAME" --generate-notes \
+              --notes "**First install:** unzip and move Claude Dash.app into /Applications. This build is ad-hoc signed, not notarized; see the README for the source-build and Gatekeeper-safe manual paths. Existing Sparkle-enabled installs update inside the app."
+          fi
+
+  publish:
+    needs: package
+    runs-on: macos-14
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: brianyoungilcho/claude-dash
+      PRERELEASE: ${{ needs.package.outputs.prerelease }}
+    steps:
+      - name: Publish the verified draft release
+        run: |
+          set -euo pipefail
+          if [ "$PRERELEASE" = "true" ]; then
+            gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease --latest=false
+          else
+            gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease=false --latest
+          fi
 
       # Bumps the Homebrew tap so `brew upgrade` serves this release.
       # Auth: an SSH deploy key scoped to the brianyoungilcho/homebrew-tap repo
-      # (write access), stored as the HOMEBREW_TAP_DEPLOY_KEY secret. A deploy
-      # key is repo-scoped (unlike a broad PAT) and is creatable entirely from
-      # the CLI — no web UI. Re-create with:
-      #   ssh-keygen -t ed25519 -f tapkey -N "" -C claude-dash-tap-autobump
-      #   gh repo deploy-key add tapkey.pub --repo brianyoungilcho/homebrew-tap --title "claude-dash release auto-bump" --allow-write
-      #   gh secret set HOMEBREW_TAP_DEPLOY_KEY --repo brianyoungilcho/claude-dash < tapkey
+      # (write access), stored as the HOMEBREW_TAP_DEPLOY_KEY repository secret.
       - name: Update Homebrew tap
+        # The release asset must not become public while a tap outage prevents
+        # Pages from publishing the already-verified appcast. Surface the step
+        # failure in Actions, but keep the release/update channel recoverable.
+        continue-on-error: true
         env:
           TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |
           set -euo pipefail
+          if [ "$PRERELEASE" = "true" ]; then
+            echo "RC release: leaving Homebrew on the latest production version."
+            exit 0
+          fi
           if [ -z "${TAP_DEPLOY_KEY:-}" ]; then
             echo "::warning::HOMEBREW_TAP_DEPLOY_KEY is not set — the GitHub release was published but the Homebrew tap was NOT bumped. Add the deploy-key secret to enable auto-bump; until then bump the tap manually. Skipping (release itself succeeded)." >&2
             exit 0
           fi
-          VERSION="${GITHUB_REF_NAME#v}"
-          SHA="$(shasum -a 256 "Claude-Dash-${VERSION}.zip" | awk '{print $1}')"
-          echo "Bumping tap to ${VERSION} (sha256 ${SHA})"
+          version="${GITHUB_REF_NAME#v}"
+          archive_url="https://github.com/brianyoungilcho/claude-dash/releases/download/${GITHUB_REF_NAME}/Claude-Dash-${version}.zip"
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --output Claude-Dash.zip "$archive_url"
+          sha="$(shasum -a 256 Claude-Dash.zip | awk '{print $1}')"
+          echo "Bumping tap to ${version} (sha256 ${sha})"
 
           mkdir -p ~/.ssh
           printf '%s\n' "$TAP_DEPLOY_KEY" > ~/.ssh/tap_deploy_key
           chmod 600 ~/.ssh/tap_deploy_key
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap_deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
           git clone --depth 1 git@github.com:brianyoungilcho/homebrew-tap.git tap
-          CASK="tap/Casks/claude-dash.rb"
-          # Only the top-level `version` and `sha256` lines change; the url
-          # interpolates #{version} so it needs no edit.
-          sed -i '' -E "s/^  version \".*\"/  version \"${VERSION}\"/" "$CASK"
-          sed -i '' -E "s/^  sha256 \".*\"/  sha256 \"${SHA}\"/" "$CASK"
+          cask="tap/Casks/claude-dash.rb"
+          sed -i '' -E "s/^  version \".*\"/  version \"${version}\"/" "$cask"
+          sed -i '' -E "s/^  sha256 \".*\"/  sha256 \"${sha}\"/" "$cask"
 
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Casks/claude-dash.rb
           if git diff --cached --quiet; then
-            echo "Cask already at ${VERSION}; nothing to commit."
+            echo "Cask already at ${version}; nothing to commit."
           else
-            git commit -m "claude-dash ${VERSION}"
+            git commit -m "claude-dash ${version}"
             git push
           fi
+
+  deploy_pages:
+    needs: [package, publish]
+    if: needs.package.outputs.sparkle_enabled == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Download signed appcast
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sparkle-appcast
+          path: _site
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+        with:
+          path: _site
+      - name: Deploy signed appcast
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

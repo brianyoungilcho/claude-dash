@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Density scale (popover = 1.0; board window = user preference)
+// MARK: - Dashboard zoom (Quick Glance and Board each supply their own scale)
 
 private struct DashScaleKey: EnvironmentKey { static let defaultValue: CGFloat = 1.0 }
 extension EnvironmentValues {
@@ -120,26 +120,38 @@ struct MetricLine: View {
     var label: String
     var metric: UsageMetric
     var trailing: String? = nil   // defaults to the reset countdown
+    /// Codex receives `used_percent` locally; its card opts in so “12%” never
+    /// looks like ambiguous remaining quota. Claude's existing compact rows
+    /// retain their current preference-driven display.
+    var explicitPercentSemantics = false
     @Environment(\.dashScale) private var s
 
+    private var percentText: String {
+        explicitPercentSemantics
+            ? CodexMonitor.percentLabel(usedPercent: metric.utilization, showRemaining: Prefs.showRemaining)
+            : Prefs.pctLabel(metric.utilization)
+    }
+
     var body: some View {
-        HStack(spacing: 6 * s) {
+        HStack(alignment: .top, spacing: 6 * s) {
             Text(label)
                 .font(.system(size: 9 * s, weight: .medium)).foregroundStyle(.secondary)
                 .frame(width: 44 * s, alignment: .leading)
                 .lineLimit(1)
             UsageBar(pct: metric.utilization, height: 4)
-            Text(Prefs.pctLabel(metric.utilization))
+            Text(percentText)
                 .font(.system(size: 9 * s, weight: .medium)).monospacedDigit()
                 .foregroundStyle(usageColor(metric.utilization))
-                .frame(minWidth: 30 * s, alignment: .trailing)
+                .frame(minWidth: explicitPercentSemantics ? 54 * s : 30 * s, alignment: .trailing)
             Text(trailing ?? resetString(metric.resetsAt))
                 .font(.system(size: 8 * s)).foregroundStyle(.secondary)
                 .frame(width: 76 * s, alignment: .trailing)
-                .lineLimit(1)
+                .lineLimit(2)
+                .multilineTextAlignment(.trailing)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(label): \(Prefs.pctLabel(metric.utilization)), \(trailing ?? resetString(metric.resetsAt))")
+        .accessibilityLabel("\(label): \(percentText), \(trailing ?? resetString(metric.resetsAt))")
     }
 }
 
@@ -177,19 +189,21 @@ struct NoteView: View {
                         .onChange(of: draft, perform: onChange)
                         .onChange(of: focused) { if !$0 { finishEditing() } }
                         .onExitCommand { finishEditing() }   // Esc commits the note
-                    HStack(spacing: 6) {
+                    HStack(spacing: 6 * s) {
                         Text("Saves automatically · “- [ ] task” becomes a checkbox")
                             .font(.system(size: 9 * s)).foregroundStyle(.tertiary)
                             .lineLimit(1)
                         Spacer()
-                        Button("Done") { finishEditing() }
-                            .controlSize(.small)
+                        Button(action: finishEditing) {
+                            Text("Done").font(.system(size: 10 * s))
+                        }
+                            .controlSize(s >= 1.4 ? .regular : .small)
                             .keyboardShortcut(.return, modifiers: .command)
                             .help("Finish editing (⌘⏎ or Esc). Notes also save when you click away.")
                     }
                 }
             } else if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                HStack(spacing: 5) {
+                HStack(spacing: 5 * s) {
                     Image(systemName: "square.and.pencil")
                         .font(.system(size: 10 * s)).foregroundStyle(.secondary)
                     Text(placeholder)
@@ -209,7 +223,7 @@ struct NoteView: View {
                     ForEach(Array(NoteParser.lines(text).enumerated()), id: \.offset) { idx, line in
                         switch line {
                         case .checkbox(let done, let body):
-                            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                            HStack(alignment: .firstTextBaseline, spacing: 5 * s) {
                                 Button {
                                     onChange(NoteParser.toggle(text, line: idx))
                                     onCommit()
@@ -247,10 +261,10 @@ struct NoteView: View {
             }
         }
         .padding(6 * s)
-        .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(surfaceOpacity(0.05, contrast))))
+        .background(RoundedRectangle(cornerRadius: 5 * s).fill(Color.primary.opacity(surfaceOpacity(0.05, contrast))))
         .overlay {
             if editing {
-                RoundedRectangle(cornerRadius: 5).strokeBorder(Color.accentColor.opacity(0.7), lineWidth: 1.5)
+                RoundedRectangle(cornerRadius: 5 * s).strokeBorder(Color.accentColor.opacity(0.7), lineWidth: 1.5 * s)
             }
         }
         .help("Click to edit. Lines like “- [ ] task” become checkboxes. Saves automatically.")
@@ -290,7 +304,10 @@ struct EmptyAccountsView: View {
                 .font(.system(size: 11 * s)).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("Add account…", action: onAdd).controlSize(.large)
+            Button(action: onAdd) {
+                Text("Add account…").font(.system(size: 12 * s, weight: .medium))
+            }
+            .controlSize(s >= 1.4 ? .large : .regular)
         }
         .padding(24 * s)
         .frame(maxWidth: .infinity)
@@ -301,36 +318,68 @@ struct EmptyAccountsView: View {
 struct UpdatedFooterText: View {
     var lastRefresh: Date?
     var tick: Int   // dependency so it recomputes on the minute pulse
+    @Environment(\.dashScale) private var s
     var body: some View {
         if let info = updatedLabel(lastRefresh, pollInterval: Prefs.pollInterval) {
-            HStack(spacing: 3) {
+            HStack(spacing: 3 * s) {
                 if info.stale {
-                    Image(systemName: "wifi.slash").font(.system(size: 9))
+                    Image(systemName: "wifi.slash").font(.system(size: 9 * s))
                 }
                 Text(info.stale ? "\(info.text) — retrying" : info.text)
-                    .font(.system(size: 10))
+                    .font(.system(size: 10 * s))
             }
             .foregroundStyle(info.stale ? Color.orange : Color.secondary)
         }
     }
 }
 
+/// A multi-account outage is materially different from a bad individual
+/// credential. This stays local and user-driven: opening the status page does
+/// not add background polling or send any account data.
+struct UsageProblemBanner: View {
+    var problem: UsageProblem
+    @Environment(\.dashScale) private var s
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6 * s) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11 * s)).foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2 * s) {
+                Text(problem.display).font(.system(size: 11 * s, weight: .medium))
+                Text("Your stored sign-ins were not changed.")
+                    .font(.system(size: 10 * s)).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 4)
+            Button("Status") {
+                NSWorkspace.shared.open(URL(string: "https://status.claude.com/")!)
+            }
+            .buttonStyle(.borderless)
+            .font(.system(size: 10 * s, weight: .medium))
+        }
+        .padding(8 * s)
+        .background(RoundedRectangle(cornerRadius: 6 * s).fill(Color.orange.opacity(0.09)))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Claude usage may be temporarily unavailable across accounts")
+    }
+}
+
 /// Refresh button that shows a spinner and disables itself while in flight.
 struct RefreshButton: View {
     @ObservedObject var model: AppModel
+    @Environment(\.dashScale) private var s
     var body: some View {
         Group {
             if model.isRefreshing {
-                ProgressView().controlSize(.small)
+                ProgressView().controlSize(s >= 1.4 ? .regular : .small)
             } else {
                 Button(action: { Task { await model.userRefresh() } }) {
-                    Image(systemName: "arrow.clockwise")
+                    Image(systemName: "arrow.clockwise").font(.system(size: 12 * s))
                 }
                 .buttonStyle(.borderless)
                 .help("Refresh all")
             }
         }
-        .frame(width: 20)
+        .frame(width: 20 * s, height: 20 * s)
     }
 }
 
@@ -342,15 +391,26 @@ struct DashboardView: View {
     var onRemove: (Account) -> Void = { _ in }
     var onOpenBoard: () -> Void = {}
 
+    /// This view is rebuilt from `AppModel` after Preferences/menu actions
+    /// publish, so reading the stored value here lets an already-open panel
+    /// resize immediately without introducing a second presentation model.
+    private var scale: CGFloat { CGFloat(Prefs.quickGlanceTextScale) }
+
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
-            if model.accounts.isEmpty && model.codex == nil && model.ccUnmatchedSessions.isEmpty {
+            if model.accounts.isEmpty && model.codexAccounts.isEmpty && model.ccUnmatchedSessions.isEmpty {
                 EmptyAccountsView(onAdd: onAdd)
             } else {
                 ScrollView {
                     VStack(spacing: 0) {
+                        if let problem = model.globalUsageProblem {
+                            UsageProblemBanner(problem: problem)
+                                .padding(.horizontal, 12 * scale)
+                                .padding(.vertical, 8 * scale)
+                            Divider()
+                        }
                         globalNote
                         Divider()
                         let visible = model.sortedAccounts
@@ -364,6 +424,7 @@ struct DashboardView: View {
                                 open: { model.openChrome(account, path: "/new") },
                                 openUsage: { model.openChrome(account, path: "/settings/usage") },
                                 edit: { onEdit(account) },
+                                retry: { Task { _ = await model.refresh(account, force: true) } },
                                 remove: { onRemove(account) },
                                 toggleFlag: { model.toggleFlag(accountId: account.id) },
                                 noteChanged: { model.setNote(accountId: account.id, text: $0) },
@@ -373,10 +434,14 @@ struct DashboardView: View {
                             )
                             Divider()
                         }
-                        if let codex = model.codex {
-                            CodexSection(usage: codex, tick: model.displayTick,
-                                         noteText: model.notes.accounts[NotesData.codexKey]?.text ?? "",
-                                         noteChanged: { model.setNote(accountId: NotesData.codexKey, text: $0) },
+                        ForEach(model.codexAccounts) { codex in
+                            CodexSection(account: codex,
+                                         isCurrent: codex.id == model.codexCurrentAccountID,
+                                         tick: model.displayTick,
+                                         noteText: model.notes.accounts[NotesData.codexKey(for: codex.id)]?.text ?? "",
+                                         noteChanged: { model.setNote(accountId: NotesData.codexKey(for: codex.id), text: $0) },
+                                         nicknameChanged: { model.setCodexNickname(accountID: codex.id, nickname: $0) },
+                                         forget: { model.forgetCodexAccount(accountID: codex.id) },
                                          noteCommitted: { model.flushNotesNow() })
                             Divider()
                         }
@@ -390,43 +455,50 @@ struct DashboardView: View {
             }
             footer
         }
-        .frame(width: 340)
-        .frame(maxHeight: 560)
+        .frame(width: 340 * scale)
+        .frame(minHeight: 120 * scale, maxHeight: 560 * scale)
+        .environment(\.dashScale, scale)
     }
 
 
     private var header: some View {
-        HStack {
-            Text("Claude Dash").font(.system(size: 13, weight: .semibold))
+        HStack(spacing: 8 * scale) {
+            Text("Claude Dash").font(.system(size: 13 * scale, weight: .semibold))
             Spacer()
-            Button(action: onOpenBoard) { Image(systemName: "macwindow") }
+            Button(action: onOpenBoard) {
+                Image(systemName: "macwindow").font(.system(size: 12 * scale))
+            }
                 .buttonStyle(.borderless)
                 .help("Open as a window — bigger text, resizable, notes side by side (⌃⌥⌘D)")
-            Button(action: onPrefs) { Image(systemName: "gearshape") }
+            Button(action: onPrefs) {
+                Image(systemName: "gearshape").font(.system(size: 12 * scale))
+            }
                 .buttonStyle(.borderless)
                 .help("Settings")
             RefreshButton(model: model)
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
+        .padding(.horizontal, 12 * scale).padding(.vertical, 8 * scale)
     }
 
     private var globalNote: some View {
         NoteView(text: model.notes.global,
-                 placeholder: "Scratchpad — what's going on across everything…",
-                 onChange: { model.setGlobalNote($0) },
-                 onCommit: { model.flushNotesNow() })
-            .padding(.horizontal, 12).padding(.vertical, 8)
+            placeholder: "Scratchpad — what's going on across everything…",
+            onChange: { model.setGlobalNote($0) },
+            onCommit: { model.flushNotesNow() })
+            .padding(.horizontal, 12 * scale).padding(.vertical, 8 * scale)
     }
 
     private var footer: some View {
         VStack(spacing: 0) {
             Divider()
             HStack {
-                Button("Add account…", action: onAdd).buttonStyle(.borderless)
+                Button(action: onAdd) {
+                    Text("Add account…").font(.system(size: 12 * scale))
+                }.buttonStyle(.borderless)
                 Spacer()
                 UpdatedFooterText(lastRefresh: model.lastRefresh, tick: model.displayTick)
             }
-            .padding(.horizontal, 12).padding(.vertical, 7)
+            .padding(.horizontal, 12 * scale).padding(.vertical, 7 * scale)
         }
     }
 }
@@ -440,6 +512,7 @@ struct AccountRow: View {
     var open: () -> Void
     var openUsage: () -> Void
     var edit: () -> Void
+    var retry: () -> Void = {}
     var remove: () -> Void
     var toggleFlag: () -> Void = {}
     var noteChanged: (String) -> Void = { _ in }
@@ -451,8 +524,7 @@ struct AccountRow: View {
     /// Some limit is at 100% — nothing to act on here until a reset. A manual
     /// attention flag wins over the dim: the user explicitly pinned focus here.
     private var capped: Bool {
-        if case .ok(let u) = state { return u.anyLimitCapped }
-        return false
+        state.snapshot?.anyLimitCapped ?? false
     }
 
     var body: some View {
@@ -463,7 +535,11 @@ struct AccountRow: View {
                         Image(systemName: "flag.fill")
                             .font(.system(size: 9 * s)).foregroundStyle(.orange)
                     }
-                    Text(account.displayName).font(.system(size: 12 * s, weight: .semibold))
+                    Text(account.displayName)
+                        .font(.system(size: 12 * s, weight: .semibold))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .layoutPriority(1)
                     Spacer()
                     statusBadge
                 }
@@ -476,29 +552,30 @@ struct AccountRow: View {
                          onChange: noteChanged,
                          onCommit: noteCommitted)
                 Text(account.chromeProfileLabel)
-                    .font(.system(size: 10 * s)).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.system(size: 10 * s)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             VStack(alignment: .trailing, spacing: 5 * s) {
                 Button(action: open) {
                     Text("Open").font(.system(size: 11 * s, weight: .medium))
                 }
-                .controlSize(.small)
+                .controlSize(s >= 1.4 ? .regular : .small)
                 .help("Open claude.ai in \(account.chromeProfileLabel)")
                 Menu {
                     rowMenuItems
                 } label: {
-                    Image(systemName: "ellipsis")
+                    Image(systemName: "ellipsis").font(.system(size: 12 * s))
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
-                .frame(width: 24 * s)
+                .frame(width: 24 * s, height: 24 * s)
                 .help("More actions")
             }
         }
         .padding(.horizontal, 12 * s).padding(.vertical, 9 * s)
         .background(flagged ? Color.orange.opacity(0.06) : Color.clear)
         .overlay(alignment: .leading) {
-            if flagged { Rectangle().fill(Color.orange).frame(width: 2) }
+            if flagged { Rectangle().fill(Color.orange).frame(width: 2 * s) }
         }
         .cappedDim(capped && !flagged)
         .contextMenu { rowMenuItems }
@@ -525,9 +602,9 @@ struct AccountRow: View {
         case .ok(let u):
             return "session \(Int(u.session?.utilization ?? 0)) percent used"
                 + (u.anyLimitCapped ? ", limit reached" : "")
-        case .unauthorized: return "session key expired"
-        case .rateLimited: return "rate limited"
-        case .error: return "unavailable"
+        case .stale(let u, let problem):
+            return "session \(Int(u.session?.utilization ?? 0)) percent used, \(problem.display)"
+        case .problem(let problem): return problem.display
         case .loading, .unknown: return "loading"
         }
     }
@@ -535,52 +612,79 @@ struct AccountRow: View {
     @ViewBuilder private var content: some View {
         switch state {
         case .ok(let u):
-            let session = u.session?.utilization ?? 0
-            VStack(alignment: .leading, spacing: 4 * s) {
-                // Session — the primary metric, full-size bar.
-                HStack {
-                    Text("Session").font(.system(size: 10 * s)).foregroundStyle(.secondary)
-                    Spacer()
-                    Text(resetString(u.session?.resetsAt))
-                        .font(.system(size: 9 * s)).foregroundStyle(.secondary)
-                    Text(Prefs.pctLabel(session))
-                        .font(.system(size: 10 * s, weight: .semibold)).monospacedDigit()
-                        .foregroundStyle(usageColor(session))
-                }
-                UsageBar(pct: session)
-                if let cap = u.projectedCap {
-                    Label("At this pace, caps \(cap.formatted(date: .omitted, time: .shortened))",
-                          systemImage: "speedometer")
-                        .font(.system(size: 9 * s)).foregroundStyle(.orange)
-                }
-                // Weekly + per-model caps (e.g. Fable) — compact aligned lines.
-                if let weekly = u.weekly {
-                    MetricLine(label: "Weekly", metric: weekly)
-                }
-                ForEach(Array(u.scoped.enumerated()), id: \.offset) { _, s in
-                    MetricLine(label: s.name, metric: s.metric)
-                }
-                if let extra = u.extra {
-                    MetricLine(label: "Extra",
-                               metric: UsageMetric(utilization: extra.percent, resetsAt: nil),
-                               trailing: extra.usedDisplay ?? "")
-                }
+            usageMetrics(u)
+        case .stale(let u, let problem):
+            VStack(alignment: .leading, spacing: 5 * s) {
+                usageMetrics(u)
+                problemLine(problem)
             }
         case .loading, .unknown:
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
+            HStack(alignment: .top, spacing: 6 * s) {
+                ProgressView().controlSize(s >= 1.4 ? .regular : .small)
                 Text("Loading…").font(.system(size: 11 * s)).foregroundStyle(.secondary)
             }.frame(height: 20 * s)
-        case .unauthorized:
-            Button(action: edit) {
-                Label("Session key expired — replace", systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11 * s))
-            }.buttonStyle(.borderless).foregroundStyle(.red)
-        case .rateLimited:
-            Text("Rate limited — retrying soon").font(.system(size: 11 * s)).foregroundStyle(.orange)
-        case .error(let m):
-            Text(m).font(.system(size: 10 * s)).foregroundStyle(.secondary).lineLimit(2)
+        case .problem(let problem):
+            problemLine(problem)
         }
+    }
+
+    @ViewBuilder private func usageMetrics(_ u: AccountUsage) -> some View {
+        let session = u.session?.utilization ?? 0
+        VStack(alignment: .leading, spacing: 4 * s) {
+            // Session — the primary metric, full-size bar.
+            HStack(spacing: 6 * s) {
+                Text("Session").font(.system(size: 10 * s)).foregroundStyle(.secondary)
+                Spacer()
+                Text(resetString(u.session?.resetsAt))
+                    .font(.system(size: 9 * s)).foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.trailing)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(Prefs.pctLabel(session))
+                    .font(.system(size: 10 * s, weight: .semibold)).monospacedDigit()
+                    .foregroundStyle(usageColor(session))
+            }
+            UsageBar(pct: session)
+            if let cap = u.projectedCap {
+                Label("At this pace, caps \(cap.formatted(date: .omitted, time: .shortened))",
+                      systemImage: "speedometer")
+                    .font(.system(size: 9 * s)).foregroundStyle(.orange)
+            }
+            // Weekly + per-model caps (e.g. Fable) — compact aligned lines.
+            if let weekly = u.weekly {
+                MetricLine(label: "Weekly", metric: weekly)
+            }
+            ForEach(Array(u.scoped.enumerated()), id: \.offset) { _, scope in
+                MetricLine(label: scope.name, metric: scope.metric)
+            }
+            if let extra = u.extra {
+                MetricLine(label: "Extra",
+                           metric: UsageMetric(utilization: extra.percent, resetsAt: nil),
+                           trailing: extra.usedDisplay ?? "")
+            }
+        }
+    }
+
+    @ViewBuilder private func problemLine(_ problem: UsageProblem) -> some View {
+        HStack(spacing: 5 * s) {
+            Image(systemName: problem.needsSignIn ? "exclamationmark.triangle.fill" : "arrow.clockwise")
+                .font(.system(size: 10 * s, weight: .semibold))
+            Text(problem.display)
+                .font(.system(size: 10 * s))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+            if problem.needsSignIn {
+                Button("Sign in again", action: edit)
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 10 * s, weight: .medium))
+            } else if problem.isTransient || problem == .accessDenied {
+                Button("Retry", action: retry)
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 10 * s, weight: .medium))
+            }
+        }
+        .foregroundStyle(problem.needsSignIn ? Color.red : problem.isTransient ? Color.orange : Color.secondary)
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder private var statusBadge: some View {
@@ -594,9 +698,14 @@ struct AccountRow: View {
             } else {
                 Circle().fill(usageColor(five)).frame(width: 7 * s, height: 7 * s)
             }
-        case .unauthorized:
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 9 * s)).foregroundStyle(.red)
+        case .stale(_, let problem):
+            Image(systemName: problem.needsSignIn ? "exclamationmark.triangle.fill" : "arrow.clockwise")
+                .font(.system(size: 9 * s))
+                .foregroundStyle(problem.needsSignIn ? Color.red : Color.orange)
+        case .problem(let problem):
+            Image(systemName: problem.needsSignIn ? "exclamationmark.triangle.fill" : "arrow.clockwise")
+                .font(.system(size: 9 * s))
+                .foregroundStyle(problem.needsSignIn ? Color.red : Color.orange)
         default:
             EmptyView()
         }
@@ -612,13 +721,13 @@ struct CCSessionLines: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2 * s) {
             ForEach(sessions) { session in
-                HStack(spacing: 5) {
+                HStack(spacing: 5 * s) {
                     Image(systemName: "terminal")
                         .font(.system(size: 8 * s))
                         .foregroundStyle(session.waiting ? .orange : .secondary)
                     Text("Claude Code · \(session.projectDisplay)")
                         .font(.system(size: 10 * s)).lineLimit(1)
-                    Spacer(minLength: 4)
+                    Spacer(minLength: 4 * s)
                     Text(session.waiting ? "waiting for your input" : relative(session.lastActivity))
                         .font(.system(size: 9 * s))
                         .foregroundStyle(session.waiting ? .orange : .secondary)
@@ -679,23 +788,42 @@ struct ClaudeCodeSection: View {
 
 // MARK: - Codex usage (local read from ~/.codex; nothing leaves the machine)
 
-/// The Codex account's rate-limit window(s) as at-a-glance gauges, mirroring the
-/// per-account Claude metrics. Reuses `MetricLine`; the "as of" age is honest
-/// about this being a last-known local snapshot (Codex only writes it on a turn).
+/// One locally remembered Codex identity. The current account is surfaced first,
+/// but each card retains its own last-known snapshot and note while another
+/// account is active in Codex.
 struct CodexSection: View {
-    var usage: CodexUsage
+    var account: CodexAccount
+    var isCurrent = false
     var tick: Int = 0   // recompute the "as of" age on the minute pulse
     var noteText: String = ""
     var noteChanged: (String) -> Void = { _ in }
+    var nicknameChanged: (String) -> Void = { _ in }
+    var forget: () -> Void = {}
     var noteCommitted: () -> Void = {}
     @Environment(\.dashScale) private var s
+    @State private var editingNickname = false
+    @State private var nicknameDraft = ""
+    @State private var showingForgetConfirmation = false
+
+    private var usage: CodexUsage? { account.usage }
+    private var plan: String? { usage?.planType ?? account.planType }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5 * s) {
             HStack(spacing: 6 * s) {
                 Text("CODEX")
                     .font(.system(size: 9 * s, weight: .semibold)).foregroundStyle(.secondary)
-                if let plan = usage.planType, !plan.isEmpty {
+                Text(account.displayName)
+                    .font(.system(size: 11 * s, weight: .semibold))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .layoutPriority(1)
+                if isCurrent {
+                    Text("CURRENT")
+                        .font(.system(size: 7 * s, weight: .semibold))
+                        .foregroundStyle(.green)
+                }
+                if let plan, !plan.isEmpty {
                     Text(plan.uppercased())
                         .font(.system(size: 8 * s, weight: .semibold))
                         .padding(.horizontal, 4 * s).padding(.vertical, 1 * s)
@@ -708,19 +836,65 @@ struct CodexSection: View {
                         .font(.system(size: 8 * s)).foregroundStyle(.orange)
                         .accessibilityHidden(true)
                 }
-                Text(agoText)
-                    .font(.system(size: 8 * s))
-                    .foregroundStyle(stale ? Color.orange : .secondary)
+                if let usage {
+                    Text(agoText(usage))
+                        .font(.system(size: 8 * s))
+                        .foregroundStyle(stale ? Color.orange : .secondary)
+                        .multilineTextAlignment(.trailing)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Menu {
+                    Button("Rename…") {
+                        nicknameDraft = account.nickname ?? ""
+                        editingNickname = true
+                    }
+                    Button("Forget account…", role: .destructive) {
+                        showingForgetConfirmation = true
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 11 * s, weight: .semibold))
+                }
+                .menuStyle(.borderlessButton)
+                .accessibilityLabel("Codex account actions")
             }
-            if let email = usage.accountEmail, !email.isEmpty {
-                Text(email).font(.system(size: 10 * s)).foregroundStyle(.secondary).lineLimit(1)
+            if editingNickname {
+                HStack(spacing: 5 * s) {
+                    TextField("Nickname", text: $nicknameDraft, onCommit: finishRename)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 10 * s))
+                    Button("Done", action: finishRename).controlSize(.small)
+                    Button("Cancel") { editingNickname = false }.controlSize(.small)
+                }
             }
-            // trailing: recomputes resetString each minute pulse (via `tick`) so
-            // the countdown keeps ticking while Codex is idle and the snapshot,
-            // hence the metric, is unchanged.
-            ForEach(Array(usage.windows.enumerated()), id: \.offset) { _, window in
-                MetricLine(label: window.label, metric: window.metric,
-                           trailing: resetString(window.metric.resetsAt))
+            if let email = account.email, !email.isEmpty {
+                Text(email).font(.system(size: 10 * s)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let usage {
+                // trailing: recomputes resetString each minute pulse (via tick)
+                // so the countdown keeps ticking while Codex is idle.
+                ForEach(Array(usage.windows.enumerated()), id: \.offset) { _, window in
+                    MetricLine(label: window.label, metric: window.metric,
+                               trailing: resetString(window.metric.resetsAt),
+                               explicitPercentSemantics: true)
+                }
+            }
+            if account.isPending {
+                Label(pendingMessage, systemImage: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 9 * s))
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if usage == nil {
+                Text("No local usage snapshot yet.")
+                    .font(.system(size: 9 * s)).foregroundStyle(.secondary)
+            } else if stale {
+                Label(staleMessage,
+                      systemImage: "clock.badge.exclamationmark")
+                    .font(.system(size: 9 * s))
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             NoteView(text: noteText,
                      placeholder: "What am I working on here…",
@@ -730,31 +904,68 @@ struct CodexSection: View {
         .padding(.horizontal, 12 * s).padding(.vertical, 9 * s)
         .cappedDim(capped)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Codex usage" + (usage.accountEmail.map { ", \($0)" } ?? "")
-                            + (capped ? ", limit reached" : "")
-                            + (stale ? ", reading may be out of date" : ""))
+        .accessibilityLabel(accessibilityText)
+        .onAppear { nicknameDraft = account.nickname ?? "" }
+        .onChange(of: account.id) { _ in
+            editingNickname = false
+            nicknameDraft = account.nickname ?? ""
+        }
+        .onChange(of: account.nickname) { value in
+            if !editingNickname { nicknameDraft = value ?? "" }
+        }
+        .confirmationDialog("Forget \(account.displayName)?", isPresented: $showingForgetConfirmation,
+                            titleVisibility: .visible) {
+            Button("Forget local data", role: .destructive, action: forget)
+        } message: {
+            Text("This removes this card's cached usage and note from Claude Dash only. Codex itself is unchanged.")
+        }
     }
 
     /// Recomputed on the minute pulse (`tick` re-renders), so the dim lifts on
     /// its own once a capped window's reset time passes.
     private var capped: Bool {
-        usage.windows.contains { $0.isCurrentlyCapped() }
+        usage?.windows.contains { $0.isCurrentlyCapped() } ?? false
     }
 
     /// A stale reading: the snapshot is over an hour old, or a window's own
     /// countdown has already elapsed (so the shown percent predates a reset).
     private var stale: Bool {
-        -usage.snapshotAt.timeIntervalSinceNow > 3600
-            || usage.windows.contains { $0.metric.resetsAt.map { $0 <= Date() } ?? false }
+        usage?.isStale() ?? false
     }
 
-    private var agoText: String {
+    private var pendingMessage: String {
+        usage == nil
+            ? "Start a new Codex task and send one prompt to capture this account."
+            : "Switched accounts — start a new Codex task and send one prompt to refresh this account safely."
+    }
+
+    private var staleMessage: String {
+        isCurrent
+            ? "Snapshot is stale — send a new Codex prompt to refresh it."
+            : "Snapshot is stale — switch to this account and send a new Codex prompt to refresh it."
+    }
+
+    private var accessibilityText: String {
+        var text = "Codex usage, \(account.displayName)"
+        if let email = account.email, !email.isEmpty { text += ", \(email)" }
+        if capped { text += ", limit reached" }
+        if stale { text += ", reading may be out of date" }
+        if account.isPending { text += ", needs a fresh Codex task" }
+        return text
+    }
+
+    private func agoText(_ usage: CodexUsage) -> String {
         let mins = Int(-usage.snapshotAt.timeIntervalSinceNow) / 60
         if mins < 1 { return "just now" }
         if mins < 60 { return "as of \(mins)m ago" }
         let hrs = mins / 60
         if hrs < 24 { return "as of \(hrs)h ago" }
         return "as of \(hrs / 24)d ago"
+    }
+
+    private func finishRename() {
+        nicknameChanged(nicknameDraft)
+        editingNickname = false
     }
 }
 
@@ -802,8 +1013,7 @@ struct MenuBarGaugesView: View {
     }
 
     private func pct(_ a: Account) -> Double? {
-        if case .ok(let u) = usage[a.id] { return u.session?.utilization }
-        return nil
+        usage[a.id]?.snapshot?.session?.utilization
     }
 
     @ViewBuilder private func chip(_ a: Account) -> some View {
@@ -815,9 +1025,16 @@ struct MenuBarGaugesView: View {
             case .ok(let u):
                 let pct = u.session?.utilization ?? 0
                 miniBar(pct)
-            case .unauthorized:
-                // Distinct from a 100%-full red bar so an expired key can't be
-                // mistaken for maxed-out usage.
+            case .stale(let u, let problem):
+                if problem.needsSignIn {
+                    Image(systemName: "exclamationmark").font(.system(size: 7, weight: .bold))
+                        .foregroundStyle(.red).frame(height: 3)
+                } else {
+                    miniBar(u.session?.utilization ?? 0).opacity(0.55)
+                }
+            case .problem(let problem) where problem.needsSignIn:
+                // Distinct from a 100%-full red bar so a confirmed sign-in
+                // problem cannot be mistaken for maxed-out usage.
                 Image(systemName: "exclamationmark").font(.system(size: 7, weight: .bold))
                     .foregroundStyle(.red).frame(height: 3)
             default:
@@ -1110,6 +1327,7 @@ struct PreferencesView: View {
     @State private var hotkeyEnabled = Prefs.hotkeyEnabled
     @State private var launchAtLogin = false
     @State private var boardFloats = Prefs.boardFloats
+    @State private var quickGlanceTextScale = Prefs.quickGlanceTextScale
     @State private var boardTextScale = Prefs.boardTextScale
     @State private var hooksInstalled = ClaudeCodeMonitor.hooksInstalled()
     @State private var hooksError: String?
@@ -1134,11 +1352,27 @@ struct PreferencesView: View {
             }
             Section {
                 Toggle("Board window stays on top", isOn: $boardFloats)
-                Picker("Board text size", selection: $boardTextScale) {
-                    Text("Standard").tag(1.0)
-                    Text("Large").tag(1.25)
-                    Text("X-Large").tag(1.5)
+                Picker("Quick Glance size", selection: $quickGlanceTextScale) {
+                    ForEach(DashboardZoom.levels, id: \.self) { scale in
+                        Text(DashboardZoom.label(scale, default: DashboardZoom.quickGlanceDefault)).tag(scale)
+                    }
                 }
+                Picker("Board size", selection: $boardTextScale) {
+                    ForEach(DashboardZoom.levels, id: \.self) { scale in
+                        Text(DashboardZoom.label(scale, default: DashboardZoom.boardDefault)).tag(scale)
+                    }
+                }
+                HStack {
+                    Button("Reset Quick Glance") {
+                        quickGlanceTextScale = DashboardZoom.quickGlanceDefault
+                    }
+                    Button("Reset Board") {
+                        boardTextScale = DashboardZoom.boardDefault
+                    }
+                }
+                Text("Zoom a focused dashboard with ⌘+, ⌘−, or ⌘0. ⌥+ and ⌥− also work outside note editing.")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 HStack {
                     Text(hooksInstalled
                          ? "Claude Code hooks installed — active sessions and “waiting for your input” show on the board"
@@ -1161,7 +1395,7 @@ struct PreferencesView: View {
                 if let hooksError {
                     Text(hooksError).font(.system(size: 10)).foregroundStyle(.red)
                 }
-                Toggle("Show Codex usage (reads ~/.codex locally — no keys, no network)",
+                Toggle("Show Codex usage (reads ~/.codex locally — no tokens, no network)",
                        isOn: $monitorCodex)
             }
             Section {
@@ -1195,6 +1429,10 @@ struct PreferencesView: View {
         .onChange(of: launchAtLogin) { v in onLoginItemToggle(v) }
         .onChange(of: monitorCodex) { v in Prefs.monitorCodex = v; model.refreshCodex() }
         .onChange(of: boardFloats) { v in Prefs.boardFloats = v; model.objectWillChange.send() }
+        .onChange(of: quickGlanceTextScale) { v in
+            Prefs.quickGlanceTextScale = v
+            model.objectWillChange.send()
+        }
         .onChange(of: boardTextScale) { v in Prefs.boardTextScale = v; model.objectWillChange.send() }
     }
 }

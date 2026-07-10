@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The board window: a real, resizable macOS window where accounts become
-/// cards in an adaptive grid, rendered at the user's preferred text scale.
+/// cards in an adaptive grid, rendered at the user's preferred zoom level.
 /// `BoardContent` is pure props so the preview harness can render it without
 /// an AppModel.
 
@@ -11,7 +11,9 @@ struct BoardContent: View {
     var notes: NotesData
     var ccSessions: [CCSession]          // unmatched-only (standalone card)
     var ccByAccount: [String: [CCSession]] = [:]   // owner account id → sessions
-    var codex: CodexUsage? = nil         // local Codex usage card (nil = hidden)
+    var codexAccounts: [CodexAccount] = [] // local, identity-keyed Codex cards
+    var codexCurrentAccountID: String?
+    var globalUsageProblem: UsageProblem?
     var lastRefresh: Date?
     var displayTick: Int = 0
     var isRefreshing = false
@@ -20,12 +22,15 @@ struct BoardContent: View {
     var onEdit: (Account) -> Void = { _ in }
     var onPrefs: () -> Void = {}
     var onRefresh: () -> Void = {}
+    var retry: (Account) -> Void = { _ in }
     var open: (Account, String) -> Void = { _, _ in }
     var toggleFlag: (Account) -> Void = { _ in }
     var remove: (Account) -> Void = { _ in }
     var noteChanged: (Account, String) -> Void = { _, _ in }
     var globalNoteChanged: (String) -> Void = { _ in }
-    var codexNoteChanged: (String) -> Void = { _ in }
+    var codexNoteChanged: (CodexAccount, String) -> Void = { _, _ in }
+    var codexNicknameChanged: (CodexAccount, String) -> Void = { _, _ in }
+    var forgetCodex: (CodexAccount) -> Void = { _ in }
     var noteCommitted: () -> Void = {}
     var moveUp: (Account) -> (() -> Void)? = { _ in nil }
     var moveDown: (Account) -> (() -> Void)? = { _ in nil }
@@ -36,15 +41,15 @@ struct BoardContent: View {
     @Environment(\.dashScale) private var s
 
     private var cardColumns: [GridItem] {
-        [GridItem(.adaptive(minimum: 340 * s, maximum: 560 * s), spacing: 12, alignment: .top)]
+        [GridItem(.adaptive(minimum: 340 * s, maximum: 560 * s), spacing: 12 * s, alignment: .top)]
     }
 
     var body: some View {
         VStack(spacing: 0) {
             header
-                .padding(.horizontal, 16).padding(.vertical, 10)
+                .padding(.horizontal, 16 * s).padding(.vertical, 10 * s)
             Divider()
-            if accounts.isEmpty && codex == nil && ccSessions.isEmpty {
+            if accounts.isEmpty && codexAccounts.isEmpty && ccSessions.isEmpty {
                 EmptyAccountsView(onAdd: onAdd)
                     .frame(maxHeight: .infinity)
             } else if embedInScrollView {
@@ -53,16 +58,19 @@ struct BoardContent: View {
                 grid
             }
         }
-        .frame(minWidth: 400, minHeight: 320)
+        .frame(minWidth: 400 * s, minHeight: 320 * s)
     }
 
     private var grid: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 12 * s) {
+            if let globalUsageProblem {
+                UsageProblemBanner(problem: globalUsageProblem)
+            }
             NoteView(text: notes.global,
                      placeholder: "Scratchpad — what's going on across everything…",
                      onChange: globalNoteChanged,
                      onCommit: noteCommitted)
-            LazyVGrid(columns: cardColumns, alignment: .leading, spacing: 12) {
+            LazyVGrid(columns: cardColumns, alignment: .leading, spacing: 12 * s) {
                 ForEach(accounts) { account in
                     card {
                         AccountRow(
@@ -74,6 +82,7 @@ struct BoardContent: View {
                             open: { open(account, "/new") },
                             openUsage: { open(account, "/settings/usage") },
                             edit: { onEdit(account) },
+                            retry: { retry(account) },
                             remove: { remove(account) },
                             toggleFlag: { toggleFlag(account) },
                             noteChanged: { noteChanged(account, $0) },
@@ -83,38 +92,52 @@ struct BoardContent: View {
                         )
                     }
                 }
-                if let codex {
-                    card { CodexSection(usage: codex, tick: displayTick,
-                                        noteText: notes.accounts[NotesData.codexKey]?.text ?? "",
-                                        noteChanged: codexNoteChanged,
-                                        noteCommitted: noteCommitted) }
+                ForEach(codexAccounts) { codex in
+                    card {
+                        CodexSection(account: codex,
+                                     isCurrent: codex.id == codexCurrentAccountID,
+                                     tick: displayTick,
+                                     noteText: notes.accounts[NotesData.codexKey(for: codex.id)]?.text ?? "",
+                                     noteChanged: { codexNoteChanged(codex, $0) },
+                                     nicknameChanged: { codexNicknameChanged(codex, $0) },
+                                     forget: { forgetCodex(codex) },
+                                     noteCommitted: noteCommitted)
+                    }
                 }
                 if !ccSessions.isEmpty {
                     card { ClaudeCodeSection(sessions: ccSessions) }
                 }
             }
         }
-        .padding(16)
+        .padding(16 * s)
     }
 
     private func card<V: View>(@ViewBuilder _ content: () -> V) -> some View {
         content()
             .frame(maxWidth: .infinity, alignment: .topLeading)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.045)))
+            .background(RoundedRectangle(cornerRadius: 10 * s).fill(Color.primary.opacity(0.045)))
     }
 
     private var header: some View {
-        HStack {
-            Button("Add account…", action: onAdd).controlSize(.regular)
+        HStack(spacing: 8 * s) {
+            Button(action: onAdd) {
+                Text("Add account…").font(.system(size: 12 * s))
+            }.controlSize(s >= 1.4 ? .large : .regular)
             Spacer()
             UpdatedFooterText(lastRefresh: lastRefresh, tick: displayTick)
-            Button(action: onPrefs) { Image(systemName: "gearshape") }
+            Button(action: onPrefs) {
+                Image(systemName: "gearshape").font(.system(size: 12 * s))
+            }
                 .buttonStyle(.borderless).help("Settings")
             if isRefreshing {
-                ProgressView().controlSize(.small).frame(width: 20)
+                ProgressView().controlSize(s >= 1.4 ? .regular : .small)
+                    .frame(width: 20 * s, height: 20 * s)
             } else {
-                Button(action: onRefresh) { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.borderless).help("Refresh all").frame(width: 20)
+                Button(action: onRefresh) {
+                    Image(systemName: "arrow.clockwise").font(.system(size: 12 * s))
+                }
+                    .buttonStyle(.borderless).help("Refresh all")
+                    .frame(width: 20 * s, height: 20 * s)
             }
         }
     }
@@ -134,7 +157,9 @@ struct BoardView: View {
             notes: model.notes,
             ccSessions: model.ccUnmatchedSessions,
             ccByAccount: model.ccOwnerAccountId.map { [$0: model.ccSessions] } ?? [:],
-            codex: model.codex,
+            codexAccounts: model.codexAccounts,
+            codexCurrentAccountID: model.codexCurrentAccountID,
+            globalUsageProblem: model.globalUsageProblem,
             lastRefresh: model.lastRefresh,
             displayTick: model.displayTick,
             isRefreshing: model.isRefreshing,
@@ -142,12 +167,15 @@ struct BoardView: View {
             onEdit: onEdit,
             onPrefs: onPrefs,
             onRefresh: { Task { await model.userRefresh() } },
+            retry: { account in Task { _ = await model.refresh(account, force: true) } },
             open: { model.openChrome($0, path: $1) },
             toggleFlag: { model.toggleFlag(accountId: $0.id) },
             remove: onRemove,
             noteChanged: { model.setNote(accountId: $0.id, text: $1) },
             globalNoteChanged: { model.setGlobalNote($0) },
-            codexNoteChanged: { model.setNote(accountId: NotesData.codexKey, text: $0) },
+            codexNoteChanged: { model.setNote(accountId: NotesData.codexKey(for: $0.id), text: $1) },
+            codexNicknameChanged: { model.setCodexNickname(accountID: $0.id, nickname: $1) },
+            forgetCodex: { model.forgetCodexAccount(accountID: $0.id) },
             noteCommitted: { model.flushNotesNow() },
             moveUp: { a in moveClosure(a, in: model.sortedAccounts, by: -1, model: model) },
             moveDown: { a in moveClosure(a, in: model.sortedAccounts, by: 1, model: model) }
