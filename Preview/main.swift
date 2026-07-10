@@ -75,12 +75,21 @@ MainActor.assumeIsolated {
         CCSession(projectDisplay: "webapp", projectDir: "-u-webapp",
                   lastActivity: now.addingTimeInterval(-360), waiting: true),
     ]
-    let codexSample = CodexUsage(
+    let codexPersonalUsage = CodexUsage(
+        windows: [
+            CodexWindow(label: "5h", metric: UsageMetric(utilization: 12, resetsAt: now.addingTimeInterval(2 * 3600))),
+            CodexWindow(label: "weekly", metric: UsageMetric(utilization: 36, resetsAt: now.addingTimeInterval(4 * 86400))),
+        ], planType: "plus", accountEmail: nil, snapshotAt: now.addingTimeInterval(-120))
+    let codexTeamUsage = CodexUsage(
         windows: [CodexWindow(label: "monthly",
                               metric: UsageMetric(utilization: 57, resetsAt: now.addingTimeInterval(25 * 86400)))],
-        planType: "team",
-        accountEmail: "you@example.com",
-        snapshotAt: now.addingTimeInterval(-240))
+        planType: "team", accountEmail: nil, snapshotAt: now.addingTimeInterval(-240))
+    let codexAccounts = [
+        CodexAccount(id: "codex-personal-preview", nickname: "Personal", email: "you@example.com",
+                     planType: "plus", usage: codexPersonalUsage),
+        CodexAccount(id: "codex-team-preview", nickname: "TEAM", email: "you@example.com",
+                     planType: "team", usage: codexTeamUsage),
+    ]
 
     func panel(_ scheme: ColorScheme, zoom s: CGFloat = 1.0) -> some View {
         VStack(spacing: 0) {
@@ -105,8 +114,11 @@ MainActor.assumeIsolated {
                            edit: {}, remove: {}, toggleFlag: {}, noteChanged: { _ in })
                 Divider()
             }
-            CodexSection(usage: codexSample, noteText: "- [ ] port the CLI helper")
-            Divider()
+            ForEach(codexAccounts) { account in
+                CodexSection(account: account, isCurrent: account.id == codexAccounts[0].id,
+                             noteText: "- [ ] port the CLI helper")
+                Divider()
+            }
             HStack {
                 Text("Add account…").font(.system(size: 12 * s)).foregroundStyle(.tint)
                 Spacer()
@@ -124,6 +136,28 @@ MainActor.assumeIsolated {
     render(panel(.dark, zoom: 0.9), "\(out)/panel-90.png", scale: 2)
     render(panel(.dark, zoom: 1.6), "\(out)/panel-160.png", scale: 2)
 
+    // Account-switch safety state: no old rollout is attributed to a newly
+    // signed-in account until one new Codex task has produced a fresh file.
+    let pendingCodex = CodexAccount(id: "codex-pending-preview", nickname: "Personal",
+                                    email: "you@example.com", planType: "plus",
+                                    captureAfter: now)
+    render(CodexSection(account: pendingCodex, isCurrent: true,
+                        noteText: "- [ ] start a fresh task")
+        .frame(width: 360)
+        .padding(10)
+        .background(Color(white: 0.97)), "\(out)/codex-pending.png", scale: 3)
+
+    let staleCodexUsage = CodexUsage(
+        windows: [CodexWindow(label: "monthly",
+                              metric: UsageMetric(utilization: 57, resetsAt: now.addingTimeInterval(25 * 86400)))],
+        planType: "team", accountEmail: nil, snapshotAt: now.addingTimeInterval(-2 * 3600))
+    let staleCodex = CodexAccount(id: "codex-stale-preview", nickname: "TEAM",
+                                  email: "you@example.com", planType: "team", usage: staleCodexUsage)
+    render(CodexSection(account: staleCodex, noteText: "- [ ] refresh this snapshot")
+        .frame(width: 360)
+        .padding(10)
+        .background(Color(white: 0.97)), "\(out)/codex-stale.png", scale: 3)
+
     // Board window at multiple widths — verifies the adaptive card grid and
     // the zoom environment (the narrow/high-zoom case intentionally becomes
     // one column while the wider case keeps a multi-card grid).
@@ -134,11 +168,13 @@ MainActor.assumeIsolated {
                          n.global = "Focus this week: launch + sitemap fix"
                          n.accounts["a"] = AccountNote(text: sampleNotes["a"]!.0, flagged: false)
                          n.accounts["b"] = AccountNote(text: sampleNotes["b"]!.0, flagged: true)
-                         n.accounts[NotesData.codexKey] = AccountNote(text: "- [ ] port the CLI helper")
+                         n.accounts[NotesData.codexKey(for: codexAccounts[0].id)] = AccountNote(text: "- [ ] personal Codex task")
+                         n.accounts[NotesData.codexKey(for: codexAccounts[1].id)] = AccountNote(text: "- [ ] team Codex task")
                          return n
                      }(),
                      ccSessions: [],
-                     ccByAccount: ["a": ccSessions], codex: codexSample, lastRefresh: now,
+                     ccByAccount: ["a": ccSessions], codexAccounts: codexAccounts,
+                     codexCurrentAccountID: codexAccounts[0].id, lastRefresh: now,
                      embedInScrollView: false)
             .environment(\.dashScale, textScale)
             .frame(width: width)

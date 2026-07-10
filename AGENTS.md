@@ -72,8 +72,9 @@ in the right browser profile.
 - **Layout**: `Sources/Core.swift` (models, Keychain via `security` CLI,
   `UsageAPI`), `AppModel.swift` (state/polling), `Views.swift` (SwiftUI),
   `Prefs.swift` (settings), `WebSignIn.swift` (login window), `Board.swift`
-  (standalone board window), `Codex.swift` (local `~/.codex` usage read),
-  `Updater.swift` (Sparkle standard UI + GitHub fallback), `main.swift`
+  (standalone board window), `Codex.swift` (local identity-keyed `~/.codex`
+  usage/cache; no tokens), `Updater.swift` (Sparkle standard UI + GitHub
+  fallback), `main.swift`
   (panel, menu bar, hotkey). Tests and Preview each have their own
   `main.swift` — never compile them together with `Sources/main.swift`.
 

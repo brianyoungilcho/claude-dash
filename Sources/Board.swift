@@ -11,7 +11,8 @@ struct BoardContent: View {
     var notes: NotesData
     var ccSessions: [CCSession]          // unmatched-only (standalone card)
     var ccByAccount: [String: [CCSession]] = [:]   // owner account id → sessions
-    var codex: CodexUsage? = nil         // local Codex usage card (nil = hidden)
+    var codexAccounts: [CodexAccount] = [] // local, identity-keyed Codex cards
+    var codexCurrentAccountID: String?
     var lastRefresh: Date?
     var displayTick: Int = 0
     var isRefreshing = false
@@ -25,7 +26,9 @@ struct BoardContent: View {
     var remove: (Account) -> Void = { _ in }
     var noteChanged: (Account, String) -> Void = { _, _ in }
     var globalNoteChanged: (String) -> Void = { _ in }
-    var codexNoteChanged: (String) -> Void = { _ in }
+    var codexNoteChanged: (CodexAccount, String) -> Void = { _, _ in }
+    var codexNicknameChanged: (CodexAccount, String) -> Void = { _, _ in }
+    var forgetCodex: (CodexAccount) -> Void = { _ in }
     var noteCommitted: () -> Void = {}
     var moveUp: (Account) -> (() -> Void)? = { _ in nil }
     var moveDown: (Account) -> (() -> Void)? = { _ in nil }
@@ -44,7 +47,7 @@ struct BoardContent: View {
             header
                 .padding(.horizontal, 16 * s).padding(.vertical, 10 * s)
             Divider()
-            if accounts.isEmpty && codex == nil && ccSessions.isEmpty {
+            if accounts.isEmpty && codexAccounts.isEmpty && ccSessions.isEmpty {
                 EmptyAccountsView(onAdd: onAdd)
                     .frame(maxHeight: .infinity)
             } else if embedInScrollView {
@@ -83,11 +86,17 @@ struct BoardContent: View {
                         )
                     }
                 }
-                if let codex {
-                    card { CodexSection(usage: codex, tick: displayTick,
-                                        noteText: notes.accounts[NotesData.codexKey]?.text ?? "",
-                                        noteChanged: codexNoteChanged,
-                                        noteCommitted: noteCommitted) }
+                ForEach(codexAccounts) { codex in
+                    card {
+                        CodexSection(account: codex,
+                                     isCurrent: codex.id == codexCurrentAccountID,
+                                     tick: displayTick,
+                                     noteText: notes.accounts[NotesData.codexKey(for: codex.id)]?.text ?? "",
+                                     noteChanged: { codexNoteChanged(codex, $0) },
+                                     nicknameChanged: { codexNicknameChanged(codex, $0) },
+                                     forget: { forgetCodex(codex) },
+                                     noteCommitted: noteCommitted)
+                    }
                 }
                 if !ccSessions.isEmpty {
                     card { ClaudeCodeSection(sessions: ccSessions) }
@@ -142,7 +151,8 @@ struct BoardView: View {
             notes: model.notes,
             ccSessions: model.ccUnmatchedSessions,
             ccByAccount: model.ccOwnerAccountId.map { [$0: model.ccSessions] } ?? [:],
-            codex: model.codex,
+            codexAccounts: model.codexAccounts,
+            codexCurrentAccountID: model.codexCurrentAccountID,
             lastRefresh: model.lastRefresh,
             displayTick: model.displayTick,
             isRefreshing: model.isRefreshing,
@@ -155,7 +165,9 @@ struct BoardView: View {
             remove: onRemove,
             noteChanged: { model.setNote(accountId: $0.id, text: $1) },
             globalNoteChanged: { model.setGlobalNote($0) },
-            codexNoteChanged: { model.setNote(accountId: NotesData.codexKey, text: $0) },
+            codexNoteChanged: { model.setNote(accountId: NotesData.codexKey(for: $0.id), text: $1) },
+            codexNicknameChanged: { model.setCodexNickname(accountID: $0.id, nickname: $1) },
+            forgetCodex: { model.forgetCodexAccount(accountID: $0.id) },
             noteCommitted: { model.flushNotesNow() },
             moveUp: { a in moveClosure(a, in: model.sortedAccounts, by: -1, model: model) },
             moveDown: { a in moveClosure(a, in: model.sortedAccounts, by: 1, model: model) }

@@ -120,7 +120,17 @@ struct MetricLine: View {
     var label: String
     var metric: UsageMetric
     var trailing: String? = nil   // defaults to the reset countdown
+    /// Codex receives `used_percent` locally; its card opts in so “12%” never
+    /// looks like ambiguous remaining quota. Claude's existing compact rows
+    /// retain their current preference-driven display.
+    var explicitPercentSemantics = false
     @Environment(\.dashScale) private var s
+
+    private var percentText: String {
+        explicitPercentSemantics
+            ? CodexMonitor.percentLabel(usedPercent: metric.utilization, showRemaining: Prefs.showRemaining)
+            : Prefs.pctLabel(metric.utilization)
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 6 * s) {
@@ -129,10 +139,10 @@ struct MetricLine: View {
                 .frame(width: 44 * s, alignment: .leading)
                 .lineLimit(1)
             UsageBar(pct: metric.utilization, height: 4)
-            Text(Prefs.pctLabel(metric.utilization))
+            Text(percentText)
                 .font(.system(size: 9 * s, weight: .medium)).monospacedDigit()
                 .foregroundStyle(usageColor(metric.utilization))
-                .frame(minWidth: 30 * s, alignment: .trailing)
+                .frame(minWidth: explicitPercentSemantics ? 54 * s : 30 * s, alignment: .trailing)
             Text(trailing ?? resetString(metric.resetsAt))
                 .font(.system(size: 8 * s)).foregroundStyle(.secondary)
                 .frame(width: 76 * s, alignment: .trailing)
@@ -141,7 +151,7 @@ struct MetricLine: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(label): \(Prefs.pctLabel(metric.utilization)), \(trailing ?? resetString(metric.resetsAt))")
+        .accessibilityLabel("\(label): \(percentText), \(trailing ?? resetString(metric.resetsAt))")
     }
 }
 
@@ -390,7 +400,7 @@ struct DashboardView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            if model.accounts.isEmpty && model.codex == nil && model.ccUnmatchedSessions.isEmpty {
+            if model.accounts.isEmpty && model.codexAccounts.isEmpty && model.ccUnmatchedSessions.isEmpty {
                 EmptyAccountsView(onAdd: onAdd)
             } else {
                 ScrollView {
@@ -423,10 +433,14 @@ struct DashboardView: View {
                             )
                             Divider()
                         }
-                        if let codex = model.codex {
-                            CodexSection(usage: codex, tick: model.displayTick,
-                                         noteText: model.notes.accounts[NotesData.codexKey]?.text ?? "",
-                                         noteChanged: { model.setNote(accountId: NotesData.codexKey, text: $0) },
+                        ForEach(model.codexAccounts) { codex in
+                            CodexSection(account: codex,
+                                         isCurrent: codex.id == model.codexCurrentAccountID,
+                                         tick: model.displayTick,
+                                         noteText: model.notes.accounts[NotesData.codexKey(for: codex.id)]?.text ?? "",
+                                         noteChanged: { model.setNote(accountId: NotesData.codexKey(for: codex.id), text: $0) },
+                                         nicknameChanged: { model.setCodexNickname(accountID: codex.id, nickname: $0) },
+                                         forget: { model.forgetCodexAccount(accountID: codex.id) },
                                          noteCommitted: { model.flushNotesNow() })
                             Divider()
                         }
@@ -773,23 +787,39 @@ struct ClaudeCodeSection: View {
 
 // MARK: - Codex usage (local read from ~/.codex; nothing leaves the machine)
 
-/// The Codex account's rate-limit window(s) as at-a-glance gauges, mirroring the
-/// per-account Claude metrics. Reuses `MetricLine`; the "as of" age is honest
-/// about this being a last-known local snapshot (Codex only writes it on a turn).
+/// One locally remembered Codex identity. The current account is surfaced first,
+/// but each card retains its own last-known snapshot and note while another
+/// account is active in Codex.
 struct CodexSection: View {
-    var usage: CodexUsage
+    var account: CodexAccount
+    var isCurrent = false
     var tick: Int = 0   // recompute the "as of" age on the minute pulse
     var noteText: String = ""
     var noteChanged: (String) -> Void = { _ in }
+    var nicknameChanged: (String) -> Void = { _ in }
+    var forget: () -> Void = {}
     var noteCommitted: () -> Void = {}
     @Environment(\.dashScale) private var s
+    @State private var editingNickname = false
+    @State private var nicknameDraft = ""
+    @State private var showingForgetConfirmation = false
+
+    private var usage: CodexUsage? { account.usage }
+    private var plan: String? { usage?.planType ?? account.planType }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5 * s) {
             HStack(spacing: 6 * s) {
                 Text("CODEX")
                     .font(.system(size: 9 * s, weight: .semibold)).foregroundStyle(.secondary)
-                if let plan = usage.planType, !plan.isEmpty {
+                Text(account.displayName)
+                    .font(.system(size: 11 * s, weight: .semibold)).lineLimit(1)
+                if isCurrent {
+                    Text("CURRENT")
+                        .font(.system(size: 7 * s, weight: .semibold))
+                        .foregroundStyle(.green)
+                }
+                if let plan, !plan.isEmpty {
                     Text(plan.uppercased())
                         .font(.system(size: 8 * s, weight: .semibold))
                         .padding(.horizontal, 4 * s).padding(.vertical, 1 * s)
@@ -802,20 +832,62 @@ struct CodexSection: View {
                         .font(.system(size: 8 * s)).foregroundStyle(.orange)
                         .accessibilityHidden(true)
                 }
-                Text(agoText)
-                    .font(.system(size: 8 * s))
-                    .foregroundStyle(stale ? Color.orange : .secondary)
+                if let usage {
+                    Text(agoText(usage))
+                        .font(.system(size: 8 * s))
+                        .foregroundStyle(stale ? Color.orange : .secondary)
+                }
+                Menu {
+                    Button("Rename…") {
+                        nicknameDraft = account.nickname ?? ""
+                        editingNickname = true
+                    }
+                    Button("Forget account…", role: .destructive) {
+                        showingForgetConfirmation = true
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 11 * s, weight: .semibold))
+                }
+                .menuStyle(.borderlessButton)
+                .accessibilityLabel("Codex account actions")
             }
-            if let email = usage.accountEmail, !email.isEmpty {
+            if editingNickname {
+                HStack(spacing: 5 * s) {
+                    TextField("Nickname", text: $nicknameDraft, onCommit: finishRename)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 10 * s))
+                    Button("Done", action: finishRename).controlSize(.small)
+                    Button("Cancel") { editingNickname = false }.controlSize(.small)
+                }
+            }
+            if let email = account.email, !email.isEmpty {
                 Text(email).font(.system(size: 10 * s)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            // trailing: recomputes resetString each minute pulse (via `tick`) so
-            // the countdown keeps ticking while Codex is idle and the snapshot,
-            // hence the metric, is unchanged.
-            ForEach(Array(usage.windows.enumerated()), id: \.offset) { _, window in
-                MetricLine(label: window.label, metric: window.metric,
-                           trailing: resetString(window.metric.resetsAt))
+            if let usage {
+                // trailing: recomputes resetString each minute pulse (via tick)
+                // so the countdown keeps ticking while Codex is idle.
+                ForEach(Array(usage.windows.enumerated()), id: \.offset) { _, window in
+                    MetricLine(label: window.label, metric: window.metric,
+                               trailing: resetString(window.metric.resetsAt),
+                               explicitPercentSemantics: true)
+                }
+            }
+            if account.isPending {
+                Label(pendingMessage, systemImage: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 9 * s))
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if usage == nil {
+                Text("No local usage snapshot yet.")
+                    .font(.system(size: 9 * s)).foregroundStyle(.secondary)
+            } else if stale {
+                Label(staleMessage,
+                      systemImage: "clock.badge.exclamationmark")
+                    .font(.system(size: 9 * s))
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             NoteView(text: noteText,
                      placeholder: "What am I working on here…",
@@ -825,31 +897,68 @@ struct CodexSection: View {
         .padding(.horizontal, 12 * s).padding(.vertical, 9 * s)
         .cappedDim(capped)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Codex usage" + (usage.accountEmail.map { ", \($0)" } ?? "")
-                            + (capped ? ", limit reached" : "")
-                            + (stale ? ", reading may be out of date" : ""))
+        .accessibilityLabel(accessibilityText)
+        .onAppear { nicknameDraft = account.nickname ?? "" }
+        .onChange(of: account.id) { _ in
+            editingNickname = false
+            nicknameDraft = account.nickname ?? ""
+        }
+        .onChange(of: account.nickname) { value in
+            if !editingNickname { nicknameDraft = value ?? "" }
+        }
+        .confirmationDialog("Forget \(account.displayName)?", isPresented: $showingForgetConfirmation,
+                            titleVisibility: .visible) {
+            Button("Forget local data", role: .destructive, action: forget)
+        } message: {
+            Text("This removes this card's cached usage and note from Claude Dash only. Codex itself is unchanged.")
+        }
     }
 
     /// Recomputed on the minute pulse (`tick` re-renders), so the dim lifts on
     /// its own once a capped window's reset time passes.
     private var capped: Bool {
-        usage.windows.contains { $0.isCurrentlyCapped() }
+        usage?.windows.contains { $0.isCurrentlyCapped() } ?? false
     }
 
     /// A stale reading: the snapshot is over an hour old, or a window's own
     /// countdown has already elapsed (so the shown percent predates a reset).
     private var stale: Bool {
-        -usage.snapshotAt.timeIntervalSinceNow > 3600
-            || usage.windows.contains { $0.metric.resetsAt.map { $0 <= Date() } ?? false }
+        usage?.isStale() ?? false
     }
 
-    private var agoText: String {
+    private var pendingMessage: String {
+        usage == nil
+            ? "Start a new Codex task and send one prompt to capture this account."
+            : "Switched accounts — start a new Codex task and send one prompt to refresh this account safely."
+    }
+
+    private var staleMessage: String {
+        isCurrent
+            ? "Snapshot is stale — send a new Codex prompt to refresh it."
+            : "Snapshot is stale — switch to this account and send a new Codex prompt to refresh it."
+    }
+
+    private var accessibilityText: String {
+        var text = "Codex usage, \(account.displayName)"
+        if let email = account.email, !email.isEmpty { text += ", \(email)" }
+        if capped { text += ", limit reached" }
+        if stale { text += ", reading may be out of date" }
+        if account.isPending { text += ", needs a fresh Codex task" }
+        return text
+    }
+
+    private func agoText(_ usage: CodexUsage) -> String {
         let mins = Int(-usage.snapshotAt.timeIntervalSinceNow) / 60
         if mins < 1 { return "just now" }
         if mins < 60 { return "as of \(mins)m ago" }
         let hrs = mins / 60
         if hrs < 24 { return "as of \(hrs)h ago" }
         return "as of \(hrs / 24)d ago"
+    }
+
+    private func finishRename() {
+        nicknameChanged(nicknameDraft)
+        editingNickname = false
     }
 }
 
@@ -1279,7 +1388,7 @@ struct PreferencesView: View {
                 if let hooksError {
                     Text(hooksError).font(.system(size: 10)).foregroundStyle(.red)
                 }
-                Toggle("Show Codex usage (reads ~/.codex locally — no keys, no network)",
+                Toggle("Show Codex usage (reads ~/.codex locally — no tokens, no network)",
                        isOn: $monitorCodex)
             }
             Section {

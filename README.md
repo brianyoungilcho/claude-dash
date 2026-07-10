@@ -34,6 +34,11 @@ at a glance, one click to open claude.ai in the right browser profile.
   and a **Claude Code** section shows your local sessions, including
   *"waiting for your input."* Notes and signals are all local files; nothing
   leaves your Mac.
+- **Codex Personal + Team cards** — remembers each locally observed Codex
+  account separately, including its own last-known rate-limit snapshot, note,
+  nickname, and plan badge. Codex credentials are never stored, logged,
+  transmitted, or reused; Dash reads only local rollout snapshots and
+  non-secret display claims from `~/.codex`.
 - **In-app sign-in** — adding an account opens a claude.ai login window and
   captures the session key automatically; no DevTools digging. (Manual
   cookie-paste still works.)
@@ -141,6 +146,27 @@ Notes are stored in
 `~/Library/Application Support/Claude Dash/notes.json` — plain JSON, local
 only, trivially backed up or synced with your own tooling.
 
+### Track Personal and Team Codex accounts
+
+Turn on **Show Codex usage** in Preferences (it is on by default). Claude Dash
+reads Codex's local rollout files only; it does not call an OpenAI endpoint or
+save an OAuth/access/refresh token.
+
+1. With TEAM signed in to Codex, make a normal Codex turn. Dash captures it as
+   the first remembered card.
+2. Switch Codex to Personal. Dash places Personal first as a pending card.
+3. Start a **new Codex task** and send one prompt. That gives Dash a safe,
+   attributable local snapshot for Personal while the TEAM card remains with
+   its honest “as of…” time.
+
+This new-task step is intentional: Codex's old rollout history has no stable
+account id, so Claude Dash never guesses that a late TEAM event belongs to a
+newly signed-in Personal account. Use the `…` menu on a Codex card to rename
+it (for example, “Personal” or “TEAM”) or forget its local cache and note.
+Codex records `used_percent`; each card explicitly says **used** or **left**
+according to your display preference and marks an old/reset snapshot as needing
+a new prompt rather than presenting it as a live remaining balance.
+
 Power-user overrides via `defaults` (browser selection):
 
 ```bash
@@ -188,6 +214,7 @@ Login Items**, if one remains.
 | `Sources/Prefs.swift` | Typed UserDefaults settings |
 | `Sources/WebSignIn.swift` | In-app claude.ai login window (isolated cookie store) |
 | `Sources/Board.swift` | Standalone board window: adaptive card grid at the user's zoom level |
+| `Sources/Codex.swift` | Local, identity-keyed Codex usage reader and cache |
 | `Sources/Updater.swift` | Sparkle standard updater bridge plus safe GitHub-release fallback |
 | `Sources/main.swift` | App bootstrap, floating panel, menu bar, hotkey, update check |
 | `build.sh` | Universal build, verified Sparkle embedding, nested signing, and bundle assembly |

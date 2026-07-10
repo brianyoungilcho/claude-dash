@@ -21,8 +21,11 @@ final class AppModel: ObservableObject {
     /// CLI's organizationUuid). Sessions render on that account's card; the
     /// standalone section only appears when no account matches.
     @Published private(set) var ccOwnerAccountId: String?
-    /// Local Codex usage snapshot (read from ~/.codex), nil when absent/disabled.
-    @Published private(set) var codex: CodexUsage?
+    /// Remembered local Codex accounts. Their cache is identity-keyed and
+    /// contains only last-known rate-limit snapshots — never Codex tokens.
+    @Published private(set) var codexAccounts: [CodexAccount] = []
+    /// Hash-derived id of the locally active Codex account, if readable.
+    @Published private(set) var codexCurrentAccountID: String?
     /// True while a user-initiated refresh is in flight (drives the spinner).
     @Published private(set) var isRefreshing = false
 
@@ -44,10 +47,15 @@ final class AppModel: ObservableObject {
     // Last (utilization, time) sample per account, for burn-rate projection.
     private var lastSample: [String: (util: Double, at: Date)] = [:]
     private var notesSaveTask: Task<Void, Never>?
+    private var codexRegistry = CodexAccountRegistry()
+    private var codexRefreshEpoch = 0
+    private var codexRefreshInFlight = false
 
     init() {
         load()
         for a in accounts { usage[a.id] = .unknown }
+        codexRegistry = CodexAccountStore.load()
+        publishCodexAccounts()
     }
 
     /// Accounts in the user's preferred order (flagged accounts always first).
@@ -397,22 +405,61 @@ final class AppModel: ObservableObject {
         if owner != ccOwnerAccountId { ccOwnerAccountId = owner }
     }
 
-    /// Rebuild the Codex usage snapshot from local session files. Pref-gated and
-    /// only when a Codex install is present, so a machine without Codex (or with
-    /// the card turned off) shows nothing. Codex rollout files are uncapped
-    /// (unlike the hook-rotated Claude Code file), so the read runs OFF the main
-    /// actor — same offloading the Keychain read uses in `refresh(_:)` — to keep
-    /// the popover/board smooth. The disable path stays synchronous so toggling
-    /// the pref off clears the card immediately.
+    /// Merge the locally active Codex identity and newest rollout snapshot.
+    /// Codex does not write an account id into historical rollout lines, so the
+    /// registry only accepts a post-switch *new task* snapshot. This prevents a
+    /// late event from an old session being painted as the newly signed-in plan.
     func refreshCodex() {
         guard Prefs.monitorCodex, CodexMonitor.isPresent() else {
-            if codex != nil { codex = nil }
+            codexRefreshEpoch &+= 1
+            codexRefreshInFlight = false
+            if !codexAccounts.isEmpty || codexCurrentAccountID != nil {
+                codexAccounts = []
+                codexCurrentAccountID = nil
+            }
             return
         }
+        guard !codexRefreshInFlight else { return }
+        codexRefreshInFlight = true
+        let epoch = codexRefreshEpoch
         Task {
-            let latest = await Task.detached { CodexMonitor.currentUsage() }.value
-            if latest != codex { codex = latest }
+            let observation = await Task.detached { CodexMonitor.observe() }.value
+            guard epoch == self.codexRefreshEpoch else { return }
+            self.codexRefreshInFlight = false
+            let change = self.codexRegistry.apply(observation)
+            if change.changed {
+                CodexAccountStore.save(self.codexRegistry)
+                if let captured = change.capturedAccountID,
+                   self.notes.migrateLegacyCodexNote(to: captured) {
+                    self.scheduleNotesSave()
+                }
+                self.publishCodexAccounts()
+            }
         }
+    }
+
+    /// Set or clear a local display nickname. This cannot affect Codex itself;
+    /// it only makes Personal/Team cards recognizable when they share an email.
+    func setCodexNickname(accountID: String, nickname: String) {
+        guard codexRegistry.rename(accountID: accountID, nickname: nickname) else { return }
+        CodexAccountStore.save(codexRegistry)
+        publishCodexAccounts()
+    }
+
+    /// Forget only Claude Dash's local cache and note. A current account does
+    /// not immediately reappear from old JSONL history; a new Codex task will
+    /// deliberately discover it again if the user continues using that account.
+    func forgetCodexAccount(accountID: String) {
+        guard codexRegistry.forget(accountID: accountID) else { return }
+        notes.accounts[NotesData.codexKey(for: accountID)] = nil
+        scheduleNotesSave()
+        CodexAccountStore.save(codexRegistry)
+        publishCodexAccounts()
+    }
+
+    private func publishCodexAccounts() {
+        codexAccounts = codexRegistry.displayAccounts()
+        codexCurrentAccountID = codexRegistry.activeAccountID
     }
 
     /// Sessions for a specific account card (only the CC owner gets them).

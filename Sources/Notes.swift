@@ -32,13 +32,14 @@ struct AccountNote: Codable, Equatable {
 }
 
 struct NotesData: Codable, Equatable {
-    /// Reserved `accounts` key for the Codex card's note. Real account ids are
-    /// UUID strings, so this can never collide with one.
-    static let codexKey = "codex"
+    /// v1.5.x had one shared Codex card and stored its note under this key.
+    /// Keep it solely to migrate the note when the first identity-keyed Codex
+    /// account is captured; never use it for a new account.
+    static let legacyCodexKey = "codex"
 
     var v: Int = 1
     var global: String = ""
-    var accounts: [String: AccountNote] = [:]   // by account id (+ codexKey)
+    var accounts: [String: AccountNote] = [:]   // Claude ids + identity-keyed Codex notes
 
     init() {}
 
@@ -47,6 +48,21 @@ struct NotesData: Codable, Equatable {
         v = (try? c.decodeIfPresent(Int.self, forKey: .v)) ?? 1
         global = (try? c.decodeIfPresent(String.self, forKey: .global)) ?? ""
         accounts = (try? c.decodeIfPresent([String: AccountNote].self, forKey: .accounts)) ?? [:]
+    }
+
+    /// Notes deliberately key off Claude Dash's local, hashed Codex account id
+    /// rather than an email. One email can own both a personal and a Team plan.
+    static func codexKey(for accountID: String) -> String { "codex:\(accountID)" }
+
+    /// One-time migration for the old singleton Codex card. Never overwrite a
+    /// newer per-account note; retaining the legacy note is safer than data loss.
+    @discardableResult
+    mutating func migrateLegacyCodexNote(to accountID: String) -> Bool {
+        let destination = Self.codexKey(for: accountID)
+        guard accounts[destination] == nil, let legacy = accounts[Self.legacyCodexKey] else { return false }
+        accounts[destination] = legacy
+        accounts[Self.legacyCodexKey] = nil
+        return true
     }
 }
 

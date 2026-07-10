@@ -69,6 +69,26 @@ you wrote for it, and that can't be undone.
 Mac only. No cloud, no sync, nothing sent anywhere. Back the file up (or sync
 it yourself) if the notes matter.
 
+**Can I track Personal and TEAM Codex accounts at the same time?**
+Yes. Claude Dash keeps a separate local card, note, nickname, and last-known
+usage snapshot for every Codex account it safely observes. After switching the
+Codex login, it puts the current account first as a pending card; start a
+**new Codex task** and send one prompt to capture it. Codex's historical
+rollout files do not identify the account that wrote them, so Dash refuses to
+guess from an old task and risk showing TEAM usage as Personal (or vice versa).
+The other cards stay visible with their own “as of…” timestamp. The `…` menu
+can rename a card or forget its local cache and note; neither action changes
+anything in Codex. Codex writes `used_percent`; Dash labels each saved value
+explicitly as **used** or **left** based on your display setting. A snapshot
+older than an hour or past its reset warns that a new Codex prompt is needed,
+instead of claiming the cached number is live.
+
+**Does Codex tracking store or send my OpenAI credentials?**
+No. It reads local rollout rate-limit snapshots plus non-secret display claims
+from the active `~/.codex/auth.json` JWT. OAuth/access/refresh tokens and the
+raw account id are never logged or persisted. The local Claude Dash cache uses
+only a hash-derived account key and has owner-only file permissions.
+
 **What do the Claude Code hooks actually do?**
 Optional (Preferences → Install). They add two entries to
 `~/.claude/settings.json` (a backup is written first) that append one JSON

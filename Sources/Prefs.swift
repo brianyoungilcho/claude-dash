@@ -104,9 +104,9 @@ enum Prefs {
         set { d.set(newValue.rawValue, forKey: "menuBarMode") }
     }
 
-    /// Show the Codex usage card (reads ~/.codex session files locally; no
-    /// network, no keys). Defaults on — it stays invisible unless a Codex
-    /// install with usable data is actually present.
+    /// Show identity-keyed Codex usage cards (reads ~/.codex locally; no
+    /// network and no persisted credentials). Defaults on — it stays invisible
+    /// unless a Codex login or session data is present.
     static var monitorCodex: Bool {
         get { d.object(forKey: "monitorCodex") == nil ? true : d.bool(forKey: "monitorCodex") }
         set { d.set(newValue, forKey: "monitorCodex") }

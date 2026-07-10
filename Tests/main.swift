@@ -108,13 +108,21 @@ print("== 7. Notes persistence round-trip (Codable) ==")
 var nd = NotesData()
 nd.global = "scratch ✍️"
 nd.accounts["id1"] = AccountNote(text: "- [ ] renew key", flagged: true, updatedAt: Date())
-nd.accounts[NotesData.codexKey] = AccountNote(text: "port the CLI", updatedAt: Date())
+let codexNoteAccount = "codex-test-account"
+nd.accounts[NotesData.codexKey(for: codexNoteAccount)] = AccountNote(text: "port the CLI", updatedAt: Date())
 if let enc = try? JSONEncoder().encode(nd), let dec = try? JSONDecoder().decode(NotesData.self, from: enc) {
     check("notes encode/decode round-trips", dec.global == nd.global
           && dec.accounts["id1"]?.flagged == true
           && dec.accounts["id1"]?.text == "- [ ] renew key")
-    check("codex note (reserved key) round-trips", dec.accounts[NotesData.codexKey]?.text == "port the CLI")
+    check("identity-keyed Codex note round-trips",
+          dec.accounts[NotesData.codexKey(for: codexNoteAccount)]?.text == "port the CLI")
 } else { check("notes codable round-trip", false) }
+var legacyNoteMigration = NotesData()
+legacyNoteMigration.accounts[NotesData.legacyCodexKey] = AccountNote(text: "legacy Codex note")
+check("legacy singleton Codex note migrates to first captured account",
+      legacyNoteMigration.migrateLegacyCodexNote(to: codexNoteAccount)
+      && legacyNoteMigration.accounts[NotesData.legacyCodexKey] == nil
+      && legacyNoteMigration.accounts[NotesData.codexKey(for: codexNoteAccount)]?.text == "legacy Codex note")
 
 print("== 7b. Capped-limit detection (drives the card dim) ==")
 func au(_ session: Double?, _ weekly: Double?, scoped: [Double] = [], extra: Double? = nil) -> AccountUsage {
@@ -145,6 +153,19 @@ check("codex 100% but reset already passed → NOT capped (stale snapshot)",
 check("codex 100% with no reset info → capped (trust the percent)",
       cw(100, resetIn: nil).isCurrentlyCapped(now: capNow))
 check("codex 82% → not capped", !cw(82, resetIn: 600).isCurrentlyCapped(now: capNow))
+let freshCodexUsage = CodexUsage(windows: [cw(42, resetIn: 600)], planType: "plus",
+                                 accountEmail: nil, snapshotAt: capNow.addingTimeInterval(-60))
+let oldCodexUsage = CodexUsage(windows: [cw(42, resetIn: 600)], planType: "plus",
+                               accountEmail: nil, snapshotAt: capNow.addingTimeInterval(-3601))
+let resetCodexUsage = CodexUsage(windows: [cw(42, resetIn: -60)], planType: "plus",
+                                 accountEmail: nil, snapshotAt: capNow.addingTimeInterval(-60))
+check("fresh Codex snapshot is not stale", !freshCodexUsage.isStale(now: capNow))
+check("hour-old Codex snapshot is stale", oldCodexUsage.isStale(now: capNow))
+check("elapsed Codex reset makes a snapshot stale", resetCodexUsage.isStale(now: capNow))
+check("Codex raw used_percent is labelled explicitly",
+      CodexMonitor.percentLabel(usedPercent: 57, showRemaining: false) == "57% used")
+check("Codex remaining label is computed from raw used_percent",
+      CodexMonitor.percentLabel(usedPercent: 57, showRemaining: true) == "43% left")
 
 print("== 8. Claude Code: sessions from hook events + hooks merge (temp fixture) ==")
 let tmpEvents = FileManager.default.temporaryDirectory
@@ -381,6 +402,12 @@ try! JSONSerialization.data(withJSONObject: ["tokens": ["id_token": jwt]]).write
 let label = CodexMonitor.accountLabel(authURL: tmpAuth)
 check("account label email from auth.json JWT", label.email == "brian@heybaro.com")
 check("account label plan from auth.json JWT", label.plan == "team")
+let decodedIdentity = CodexMonitor.accountIdentity(authURL: tmpAuth)
+check("account identity uses a local hash, not the raw account id",
+      decodedIdentity?.accountKey.hasPrefix("codex-") == true
+      && decodedIdentity?.accountKey != "acct-1")
+check("account identity preserves display-only email and plan",
+      decodedIdentity?.email == "brian@heybaro.com" && decodedIdentity?.planType == "team")
 check("missing auth.json → empty label (no crash)",
       CodexMonitor.accountLabel(authURL: tmpAuth.appendingPathExtension("nope")).email == nil)
 try? FileManager.default.removeItem(at: tmpAuth)
@@ -440,7 +467,180 @@ check("legacy 150% board setting migrates upward to 160%",
 check("invalid persisted scale uses the surface default",
       DashboardZoom.normalized(0, default: DashboardZoom.quickGlanceDefault) == 1.0)
 
-print("== 13. LIVE claude.ai endpoint — invalid key must map cleanly ==")
+print("== 13. Codex multi-account registry: safe capture, persistence, and forget ==")
+let registryStart = Date(timeIntervalSince1970: 1_800_000_000)
+let teamRawID = "team-raw-account-id-that-must-not-persist"
+let personalRawID = "personal-raw-account-id-that-must-not-persist"
+let teamKey = CodexMonitor.accountKey(accountID: teamRawID)!
+let personalKey = CodexMonitor.accountKey(accountID: personalRawID)!
+check("same account id hashes deterministically", teamKey == CodexMonitor.accountKey(accountID: teamRawID))
+check("different account ids receive different local keys", teamKey != personalKey)
+
+func registryUsage(_ pct: Double, at: Date, plan: String) -> CodexUsage {
+    CodexUsage(windows: [CodexWindow(label: "monthly",
+                                     metric: UsageMetric(utilization: pct, resetsAt: at.addingTimeInterval(86400)))],
+               planType: plan, accountEmail: nil, snapshotAt: at)
+}
+func registryReading(_ pct: Double, snapshotAt: Date, createdAt: Date, plan: String,
+                     modifiedAt: Date? = nil) -> CodexReading {
+    CodexReading(usage: registryUsage(pct, at: snapshotAt, plan: plan),
+                 sourceCreatedAt: createdAt, sourceModifiedAt: modifiedAt ?? snapshotAt)
+}
+func registryObservation(_ identity: CodexIdentity, _ reading: CodexReading?) -> CodexObservation {
+    CodexObservation(identity: identity, reading: reading, isStable: true)
+}
+
+let teamIdentity = CodexIdentity(accountKey: teamKey, email: "same@example.com",
+                                 planType: "team", authModifiedAt: registryStart)
+var registry = CodexAccountRegistry()
+let firstCapture = registry.apply(registryObservation(
+    teamIdentity,
+    registryReading(57, snapshotAt: registryStart.addingTimeInterval(2),
+                    createdAt: registryStart.addingTimeInterval(1), plan: "team")),
+    now: registryStart.addingTimeInterval(3))
+check("first active account captures an attributable snapshot",
+      firstCapture.capturedAccountID == teamKey
+      && registry.accounts.count == 1
+      && registry.accounts.first?.usage?.windows.first?.metric.utilization == 57)
+
+let bootstrapAuthTime = registryStart.addingTimeInterval(50)
+let bootstrapIdentity = CodexIdentity(accountKey: teamKey, email: "same@example.com",
+                                      planType: "team", authModifiedAt: bootstrapAuthTime)
+var bootstrapRegistry = CodexAccountRegistry()
+let bootstrapCapture = bootstrapRegistry.apply(registryObservation(
+    bootstrapIdentity,
+    // A long-running active task can have been created before a token refresh;
+    // on first upgrade its post-auth event is still safely current.
+    registryReading(58, snapshotAt: bootstrapAuthTime.addingTimeInterval(2),
+                    createdAt: registryStart.addingTimeInterval(1), plan: "team")),
+    now: bootstrapAuthTime.addingTimeInterval(3))
+check("first v1.6 launch preserves a current TEAM snapshot without a new task",
+      bootstrapCapture.capturedAccountID == teamKey
+      && bootstrapRegistry.accounts.first?.isPending == false
+      && bootstrapRegistry.accounts.first?.usage?.windows.first?.metric.utilization == 58)
+
+let personalFence = registryStart.addingTimeInterval(100)
+let personalIdentity = CodexIdentity(accountKey: personalKey, email: "same@example.com",
+                                     planType: "plus", authModifiedAt: personalFence)
+let oldTeamSource = registryReading(22, snapshotAt: personalFence.addingTimeInterval(2),
+                                    createdAt: registryStart.addingTimeInterval(4), plan: "plus")
+let pendingChange = registry.apply(registryObservation(personalIdentity, oldTeamSource),
+                                   now: personalFence.addingTimeInterval(3))
+check("account switch creates a pending Personal card instead of relabeling old usage",
+      pendingChange.capturedAccountID == nil
+      && registry.displayAccounts().map(\.id) == [personalKey, teamKey]
+      && registry.accounts.first(where: { $0.id == personalKey })?.isPending == true
+      && registry.accounts.first(where: { $0.id == personalKey })?.usage == nil
+      && registry.accounts.first(where: { $0.id == teamKey })?.usage?.windows.first?.metric.utilization == 57)
+
+let personalFresh = registryReading(14, snapshotAt: personalFence.addingTimeInterval(2),
+                                    createdAt: personalFence.addingTimeInterval(1), plan: "plus")
+var multiCandidateRegistry = CodexAccountRegistry()
+_ = multiCandidateRegistry.apply(registryObservation(
+    teamIdentity,
+    registryReading(57, snapshotAt: registryStart.addingTimeInterval(2),
+                    createdAt: registryStart.addingTimeInterval(1), plan: "team")),
+    now: registryStart.addingTimeInterval(3))
+let multiCandidateChange = multiCandidateRegistry.apply(CodexObservation(
+    identity: personalIdentity, reading: oldTeamSource, isStable: true,
+    additionalReadings: [personalFresh]), now: personalFence.addingTimeInterval(4))
+check("fresh Personal task is found even when a late old-session file is newer",
+      multiCandidateChange.capturedAccountID == personalKey
+      && multiCandidateRegistry.accounts.first(where: { $0.id == personalKey })?.usage?.windows.first?.metric.utilization == 14)
+
+let personalCapture = registry.apply(registryObservation(personalIdentity, personalFresh),
+                                     now: personalFence.addingTimeInterval(4))
+check("new post-switch task captures Personal and keeps it above Team",
+      personalCapture.capturedAccountID == personalKey
+      && registry.displayAccounts().map(\.id) == [personalKey, teamKey]
+      && registry.accounts.first(where: { $0.id == personalKey })?.isPending == false
+      && registry.accounts.first(where: { $0.id == personalKey })?.usage?.windows.first?.metric.utilization == 14)
+
+let oldMtimeButOlderEvent = registryReading(31, snapshotAt: personalFence.addingTimeInterval(8),
+                                            createdAt: personalFence.addingTimeInterval(1), plan: "plus",
+                                            modifiedAt: personalFence.addingTimeInterval(20))
+let newerEventInOlderFile = registryReading(44, snapshotAt: personalFence.addingTimeInterval(11),
+                                            createdAt: personalFence.addingTimeInterval(1), plan: "plus",
+                                            modifiedAt: personalFence.addingTimeInterval(19))
+_ = registry.apply(CodexObservation(identity: personalIdentity, reading: oldMtimeButOlderEvent,
+                                    isStable: true, additionalReadings: [newerEventInOlderFile]),
+                   now: personalFence.addingTimeInterval(21))
+check("multi-session selection prefers newest embedded token_count over file mtime",
+      registry.accounts.first(where: { $0.id == personalKey })?.usage?.windows.first?.metric.utilization == 44)
+let sameTimestampEarlierFile = registryReading(45, snapshotAt: personalFence.addingTimeInterval(14),
+                                               createdAt: personalFence.addingTimeInterval(1), plan: "plus",
+                                               modifiedAt: personalFence.addingTimeInterval(22))
+let sameTimestampLaterFile = registryReading(46, snapshotAt: personalFence.addingTimeInterval(14),
+                                             createdAt: personalFence.addingTimeInterval(1), plan: "plus",
+                                             modifiedAt: personalFence.addingTimeInterval(23))
+_ = registry.apply(CodexObservation(identity: personalIdentity, reading: sameTimestampEarlierFile,
+                                    isStable: true, additionalReadings: [sameTimestampLaterFile]),
+                   now: personalFence.addingTimeInterval(24))
+check("multi-session equal timestamps break ties by source modification time",
+      registry.accounts.first(where: { $0.id == personalKey })?.usage?.windows.first?.metric.utilization == 46)
+
+_ = registry.apply(registryObservation(
+    personalIdentity,
+    registryReading(99, snapshotAt: personalFence.addingTimeInterval(5),
+                    createdAt: registryStart.addingTimeInterval(4), plan: "plus")),
+    now: personalFence.addingTimeInterval(6))
+check("late event from pre-switch rollout never overwrites Personal",
+      registry.accounts.first(where: { $0.id == personalKey })?.usage?.windows.first?.metric.utilization == 46)
+
+let stableBefore = registry
+let unstableChange = registry.apply(CodexObservation(identity: personalIdentity, reading: personalFresh, isStable: false))
+check("auth change during read leaves the registry untouched", !unstableChange.changed && registry == stableBefore)
+check("nickname is local and reversible", registry.rename(accountID: personalKey, nickname: "Personal")
+      && registry.accounts.first(where: { $0.id == personalKey })?.displayName == "Personal")
+
+let cacheURL = FileManager.default.temporaryDirectory
+    .appendingPathComponent("cdash-codex-cache-\(UUID().uuidString).json")
+CodexAccountStore.save(registry, to: cacheURL)
+let cacheText = (try? String(contentsOf: cacheURL, encoding: .utf8)) ?? ""
+let cachePermissions = ((try? FileManager.default.attributesOfItem(atPath: cacheURL.path))?[.posixPermissions] as? NSNumber)
+let reloadedRegistry = CodexAccountStore.load(from: cacheURL)
+check("multi-account cache round-trips across restart", reloadedRegistry == registry)
+check("persisted Codex cache contains no raw account id or token-like fixture",
+      !cacheText.contains(teamRawID) && !cacheText.contains(personalRawID) && !cacheText.contains("id_token"))
+check("persisted Codex cache is owner-only", ((cachePermissions?.intValue ?? 0) & 0o077) == 0)
+try? FileManager.default.removeItem(at: cacheURL)
+
+let forgetAt = personalFence.addingTimeInterval(20)
+check("forget removes only the selected local Codex card", registry.forget(accountID: personalKey, now: forgetAt)
+      && registry.accounts.map(\.id) == [teamKey])
+_ = registry.apply(registryObservation(personalIdentity,
+    registryReading(20, snapshotAt: forgetAt.addingTimeInterval(1),
+                    createdAt: personalFence.addingTimeInterval(1), plan: "plus")),
+    now: forgetAt.addingTimeInterval(2))
+check("forgotten account is not resurrected by old history", !registry.accounts.contains(where: { $0.id == personalKey }))
+let latePreForgetSource = registryReading(99, snapshotAt: forgetAt.addingTimeInterval(10),
+                                          createdAt: personalFence.addingTimeInterval(1), plan: "plus",
+                                          modifiedAt: forgetAt.addingTimeInterval(11))
+let freshAfterForget = registryReading(21, snapshotAt: forgetAt.addingTimeInterval(2),
+                                       createdAt: forgetAt.addingTimeInterval(1), plan: "plus")
+_ = registry.apply(CodexObservation(identity: personalIdentity, reading: latePreForgetSource,
+                                    isStable: true, additionalReadings: [freshAfterForget]),
+                   now: forgetAt.addingTimeInterval(12))
+check("a fresh task intentionally rediscovers a forgotten account without using late old history",
+      registry.accounts.contains(where: { $0.id == personalKey })
+      && registry.accounts.first(where: { $0.id == personalKey })?.usage?.windows.first?.metric.utilization == 21)
+
+let corruptCacheURL = FileManager.default.temporaryDirectory
+    .appendingPathComponent("cdash-codex-corrupt-\(UUID().uuidString).json")
+try! "{{bad cache".data(using: .utf8)!.write(to: corruptCacheURL)
+let corruptLoaded = CodexAccountStore.load(from: corruptCacheURL)
+let corruptQuarantined = (try? FileManager.default.contentsOfDirectory(
+    at: corruptCacheURL.deletingLastPathComponent(), includingPropertiesForKeys: nil))?
+    .contains { $0.lastPathComponent.hasPrefix("\(corruptCacheURL.lastPathComponent).corrupt-") } ?? false
+check("corrupt Codex cache is quarantined rather than overwritten",
+      corruptLoaded == CodexAccountRegistry() && corruptQuarantined)
+for file in (try? FileManager.default.contentsOfDirectory(
+    at: corruptCacheURL.deletingLastPathComponent(), includingPropertiesForKeys: nil)) ?? []
+where file.lastPathComponent.hasPrefix("\(corruptCacheURL.lastPathComponent).corrupt-") {
+    try? FileManager.default.removeItem(at: file)
+}
+
+print("== 14. LIVE claude.ai endpoint — invalid key must map cleanly ==")
 if onCI {
     print("  SKIP  (datacenter IPs may be WAF-blocked; run locally)")
     print("\n== RESULT: \(failures == 0 ? "ALL PASS" : "\(failures) FAILURE(S)") ==")
