@@ -21,7 +21,7 @@ jobs:
   verify:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - name: Resolve release metadata
         id: release_meta
         run: ./Scripts/release-metadata.sh "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
@@ -70,7 +70,7 @@ jobs:
       SPARKLE_FEED_URL: ${{ vars.SPARKLE_FEED_URL }}
       SPARKLE_RC_FEED_URL: ${{ vars.SPARKLE_RC_FEED_URL }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - name: Resolve release metadata
         id: release_meta
         run: ./Scripts/release-metadata.sh "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
@@ -151,7 +151,9 @@ jobs:
             companion_name="appcast-rc.xml"
           fi
           feed_name="${{ steps.release_meta.outputs.feed_filename }}"
-          download_prefix="https://github.com/brianyoungilcho/claude-dash/releases/download/${GITHUB_REF_NAME}"
+          # Sparkle appends the archive filename as a URL-relative component;
+          # the trailing slash is required to retain the tag path segment.
+          download_prefix="https://github.com/brianyoungilcho/claude-dash/releases/download/${GITHUB_REF_NAME}/"
           updates="${RUNNER_TEMP}/sparkle-updates"
           pages="${RUNNER_TEMP}/pages"
           mkdir -p "$updates" "$pages"
@@ -186,8 +188,8 @@ jobs:
               -o "$updates/appcast.xml" "$updates"
 
           grep -Fq "<sparkle:version>${build_version}</sparkle:version>" "$updates/appcast.xml"
-          grep -Fq "${download_prefix}/Claude-Dash-${version}.zip" "$updates/appcast.xml"
-          archive_url="${download_prefix}/Claude-Dash-${version}.zip"
+          grep -Fq "${download_prefix}Claude-Dash-${version}.zip" "$updates/appcast.xml"
+          archive_url="${download_prefix}Claude-Dash-${version}.zip"
           archive_signature="$(ruby -r rexml/document -r rexml/xpath -e '
             doc = REXML::Document.new(File.read(ARGV[0]))
             node = REXML::XPath.match(doc, "//enclosure").find { |item| item.attributes["url"] == ARGV[1] }
