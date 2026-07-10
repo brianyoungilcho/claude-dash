@@ -205,7 +205,21 @@ check("nil date → no label", updatedLabel(nil, pollInterval: 60, now: base) ==
 let hours = updatedLabel(base.addingTimeInterval(-7200), pollInterval: 60, now: base)
 check("2h old shows hours", hours?.text == "Updated 2h ago")
 
-print("== 9. Review-fix regressions ==")
+print("== 9. Sparkle configuration ==")
+check("valid Sparkle config", SparkleConfiguration.isValid(
+    feedURL: "https://brianyoungilcho.github.io/claude-dash/appcast.xml",
+    publicEDKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+))
+check("Sparkle rejects HTTP feed", !SparkleConfiguration.isValid(
+    feedURL: "http://example.com/appcast.xml",
+    publicEDKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+))
+check("Sparkle rejects malformed public key", !SparkleConfiguration.isValid(
+    feedURL: "https://example.com/appcast.xml",
+    publicEDKey: "not-a-public-key"
+))
+
+print("== 10. Review-fix regressions ==")
 // 9a. Toggle must only flip the LEADING marker, never one inside task text.
 let tricky = "- [x] rename - [ ] placeholders in docs"
 let untoggled = NoteParser.toggle(tricky, line: 0)

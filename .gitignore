@@ -1,4 +1,6 @@
 .build/
 .build.log
+Vendor/Sparkle/
+Config/SparklePublicKey.txt
 *.log
 .DS_Store

@@ -52,11 +52,13 @@ in the right browser profile.
 
 - **Build + install**: `./build.sh` (universal arm64+x86_64 →
   `/Applications/Claude Dash.app`; version via `CLAUDE_DASH_VERSION` env —
-  CI derives it from the git tag).
+  CI derives it from the git tag). It fetches the pinned Sparkle binary
+  distribution only when absent, verifies its SHA-256, embeds it, and signs
+  nested updater helpers. No private signing key is needed for normal local
+  builds; they keep the GitHub-release update fallback.
 - **Tests**:
   ```bash
-  mkdir -p .build
-  swiftc -swift-version 5 -o .build/tests Tests/main.swift Sources/Core.swift Sources/Prefs.swift Sources/Notes.swift Sources/ClaudeCode.swift Sources/Codex.swift && ./.build/tests
+  ./Scripts/test.sh
   ```
   The live-endpoint and browser-profile checks self-skip when `$CI` is set.
 - **View renders** (design review without launching the app):
@@ -71,7 +73,7 @@ in the right browser profile.
   `UsageAPI`), `AppModel.swift` (state/polling), `Views.swift` (SwiftUI),
   `Prefs.swift` (settings), `WebSignIn.swift` (login window), `Board.swift`
   (standalone board window), `Codex.swift` (local `~/.codex` usage read),
-  `main.swift`
+  `Updater.swift` (Sparkle standard UI + GitHub fallback), `main.swift`
   (panel, menu bar, hotkey). Tests and Preview each have their own
   `main.swift` — never compile them together with `Sources/main.swift`.
 
@@ -95,6 +97,11 @@ in the right browser profile.
   AppKit text view mid-edit — the caret jumps to the end and Korean IME
   composition breaks. Bind a view-local @State and stream changes outward
   (see NoteView's `draft`).
+- Sparkle's private Ed25519 key is a release credential. Never generate,
+  export, log, or upload one during ordinary app development. The public key,
+  GitHub Pages feed, protected environment secret, and RC test procedure are
+  documented in `docs/UPDATER.md`; source builds must keep working without
+  them.
 
 ## Uninstalling for a user
 

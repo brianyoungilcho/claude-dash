@@ -9,17 +9,13 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-      - name: Compile app (both architectures)
-        run: |
-          mkdir -p .build
-          for arch in arm64 x86_64; do
-            swiftc -O -swift-version 5 -target "${arch}-apple-macos13.0" \
-              -o ".build/ClaudeDash-$arch" Sources/*.swift \
-              -framework AppKit -framework SwiftUI -framework Security \
-              -framework ServiceManagement -framework WebKit -framework Carbon \
-              -framework UserNotifications
-          done
+      - name: Bootstrap pinned Sparkle framework
+        run: ./Scripts/bootstrap-sparkle.sh
+      - name: Build universal app bundle
+        env:
+          CLAUDE_DASH_APP_PATH: ${{ runner.temp }}/Claude Dash.app
+        run: ./build.sh
+      - name: Verify embedded framework and signatures
+        run: ./Scripts/verify-sparkle-bundle.sh "${RUNNER_TEMP}/Claude Dash.app"
       - name: Run tests
-        run: |
-          swiftc -swift-version 5 -o .build/tests Tests/main.swift Sources/Core.swift Sources/Prefs.swift Sources/Notes.swift Sources/ClaudeCode.swift Sources/Codex.swift
-          ./.build/tests
+        run: ./Scripts/test.sh

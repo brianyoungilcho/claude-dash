@@ -77,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private enum ZoomSurface { case quickGlance, board }
 
     let model = AppModel()
+    private let updateManager = UpdateManager()
     private var statusItem: NSStatusItem!
     private var panel: DashboardPanel!
     private var hostingView: NSHostingView<DashboardView>!
@@ -103,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         setupMainMenu()
         setupPanel()
         setupStatusItem()
+        updateManager.start()
         registerLoginItemOnce()
         syncHotkey()
         installZoomShortcutMonitor()
@@ -646,38 +648,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func hotkeyFired() { toggleBoardWindow() }
 
-    // MARK: Update check (plain GitHub Releases — no Sparkle)
-
     @objc func checkForUpdates() {
-        let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
-        var req = URLRequest(url: URL(string: "https://api.github.com/repos/brianyoungilcho/claude-dash/releases/latest")!)
-        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        URLSession.shared.dataTask(with: req) { data, _, _ in
-            var latest: String?, url: String?
-            if let data, let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                latest = (obj["tag_name"] as? String)?.trimmingCharacters(in: CharacterSet(charactersIn: "v"))
-                url = obj["html_url"] as? String
-            }
-            DispatchQueue.main.async {
-                let alert = NSAlert()
-                if let latest {
-                    let upToDate = latest.compare(current, options: .numeric) != .orderedDescending
-                    alert.messageText = upToDate ? "You're up to date" : "Update available: v\(latest)"
-                    alert.informativeText = upToDate
-                        ? "Claude Dash v\(current) is the latest release."
-                        : "You have v\(current). Download v\(latest) from GitHub, or run git pull && ./install.sh."
-                    alert.addButton(withTitle: upToDate ? "OK" : "Open Releases")
-                    if !upToDate { alert.addButton(withTitle: "Later") }
-                    if alert.runModal() == .alertFirstButtonReturn, !upToDate, let url, let u = URL(string: url) {
-                        NSWorkspace.shared.open(u)
-                    }
-                } else {
-                    alert.messageText = "Couldn't check for updates"
-                    alert.informativeText = "GitHub wasn't reachable. Try again later."
-                    alert.runModal()
-                }
-            }
-        }.resume()
+        updateManager.checkForUpdates()
     }
 
     // MARK: Menu bar rendering

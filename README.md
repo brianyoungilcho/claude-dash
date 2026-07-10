@@ -41,6 +41,9 @@ at a glance, one click to open claude.ai in the right browser profile.
   *organization*; pick the org when adding the account.
 - **Notifications** — configurable threshold alert, plus a "session reset —
   good to go" ping for capped accounts.
+- **One-click updates** — signed release builds can use **Check for Updates…
+  → Install and Relaunch**. Source builds and older releases retain the
+  GitHub-release/manual-upgrade path until the signed updater is configured.
 - Keys live in the **macOS Keychain**, never on disk. Works with **Chrome,
   Brave, Edge, or Chromium** profiles. Global hotkey **⌃⌥⌘D**. Universal
   binary (Apple Silicon + Intel).
@@ -63,7 +66,11 @@ brew install --cask --no-quarantine brianyoungilcho/tap/claude-dash
 That's it: builds a universal binary into `/Applications/Claude Dash.app`,
 launches it, and registers it to start at login (once — disable it in
 System Settings or Preferences and your choice sticks). Local builds have no
-Gatekeeper friction. Upgrade with `git pull && ./install.sh`.
+Gatekeeper friction. Source checkouts can always upgrade with
+`git pull && ./install.sh`. On a signed-updater build, right-click the
+menu-bar icon → **Check for Updates…** → **Install and Relaunch** instead.
+The first signed-updater release still needs one manual install; older releases
+do not gain an updater retroactively.
 
 > **Prebuilt zip from [Releases](https://github.com/brianyoungilcho/claude-dash/releases)
 > instead?** The app is ad-hoc signed, not notarized, so "right-click → Open"
@@ -157,6 +164,7 @@ access: they're stored only in your local Keychain and sent only to claude.ai.
 Use at your own risk.
 
 More: [FAQ](FAQ.md) · [Uninstall](#uninstall) · [Development](#development)
+· [Signed updater setup](docs/UPDATER.md)
 
 ## Uninstall
 
@@ -180,16 +188,20 @@ Login Items**, if one remains.
 | `Sources/Prefs.swift` | Typed UserDefaults settings |
 | `Sources/WebSignIn.swift` | In-app claude.ai login window (isolated cookie store) |
 | `Sources/Board.swift` | Standalone board window: adaptive card grid at the user's zoom level |
+| `Sources/Updater.swift` | Sparkle standard updater bridge plus safe GitHub-release fallback |
 | `Sources/main.swift` | App bootstrap, floating panel, menu bar, hotkey, update check |
-| `build.sh` | Universal (arm64+x86_64) build + bundle + ad-hoc sign |
+| `build.sh` | Universal build, verified Sparkle embedding, nested signing, and bundle assembly |
+| `Scripts/bootstrap-sparkle.sh` | SHA-256-verified pinned Sparkle bootstrap |
+| `docs/UPDATER.md` | Key, appcast, GitHub Pages, and release-owner instructions |
 | `Tests/main.swift` | Headless tests (CI-safe; live-endpoint check runs locally) |
 | `Preview/main.swift` | Renders the views to PNG for design review |
 
 ```bash
-mkdir -p .build
-
 # run tests
-swiftc -swift-version 5 -o .build/tests Tests/main.swift Sources/Core.swift Sources/Prefs.swift Sources/Notes.swift Sources/ClaudeCode.swift Sources/Codex.swift && ./.build/tests
+./Scripts/test.sh
+
+# build to /Applications (downloads the pinned Sparkle framework if needed)
+./build.sh
 
 # render the views to PNGs (Preview has its own main.swift, so exclude Sources/main.swift)
 swiftc -swift-version 5 -o .build/preview Preview/main.swift \
@@ -199,8 +211,10 @@ swiftc -swift-version 5 -o .build/preview Preview/main.swift \
 OUT=/tmp ./.build/preview
 ```
 
-CI builds both architectures and runs the test suite on every push; tagging
-`v*` builds and publishes a release zip automatically.
+CI builds and verifies the embedded universal framework plus the test suite on
+every push. Tagging `v*` runs those checks before creating a draft release;
+when the signed-updater keys are configured, it signs and deploys the appcast
+before publishing that release. See [the updater guide](docs/UPDATER.md).
 
 **Roadmap / non-goals:** configurable hotkey is planned.
 Out of scope by design: local JSONL cost analytics (use
