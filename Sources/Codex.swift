@@ -180,7 +180,13 @@ struct CodexAccount: Codable, Equatable, Identifiable {
             return nickname
         }
         if let plan = planType?.trimmingCharacters(in: .whitespacesAndNewlines), !plan.isEmpty {
-            if ["free", "plus", "pro"].contains(plan.lowercased()) { return "Personal" }
+            let consumerPlan = plan.lowercased()
+                .replacingOccurrences(of: "_", with: "")
+                .replacingOccurrences(of: "-", with: "")
+            // Codex currently emits both public tier names and the internal
+            // `prolite` variant for consumer subscriptions. These all belong
+            // under the user-facing Personal identity, not separate accounts.
+            if ["free", "plus", "pro", "prolite"].contains(consumerPlan) { return "Personal" }
             return plan.capitalized
         }
         return "Codex account"

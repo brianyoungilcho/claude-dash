@@ -490,7 +490,9 @@ check("different account ids receive different local keys", teamKey != personalK
 check("consumer Codex plans default to a Personal label",
       CodexAccount(id: personalKey, planType: "plus").displayName == "Personal"
       && CodexAccount(id: personalKey, planType: "pro").displayName == "Personal"
-      && CodexAccount(id: personalKey, planType: "free").displayName == "Personal")
+      && CodexAccount(id: personalKey, planType: "free").displayName == "Personal"
+      && CodexAccount(id: personalKey, planType: "prolite").displayName == "Personal"
+      && CodexAccount(id: personalKey, planType: "pro_lite").displayName == "Personal")
 check("Team remains a distinct default Codex label",
       CodexAccount(id: teamKey, planType: "team").displayName == "Team")
 

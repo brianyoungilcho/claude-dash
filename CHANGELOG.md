@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.1 — 2026-07-10
+
+- Display Codex's observed internal `prolite`/`pro_lite` consumer plan as the
+  Personal account, while retaining the exact tier in the plan badge.
+
 ## 1.6.0 — 2026-07-10
 
 - Remember multiple local Codex identities so Personal and Team usage remain
@@ -16,4 +21,3 @@
   fail-closed GitHub release workflow. Apple Developer Program membership is
   not required; the first unnotarized install retains the documented Gatekeeper
   tradeoff.
-
