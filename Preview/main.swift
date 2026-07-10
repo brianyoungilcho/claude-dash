@@ -44,7 +44,7 @@ MainActor.assumeIsolated {
                               extra: ExtraUsage(percent: 22, usedDisplay: "4.40 USD used"),
                               fetchedAt: now,
                               projectedCap: now.addingTimeInterval(2700))),
-        "c": .unauthorized,
+        "c": .problem(.signInRequired),
         // A capped account — session at 100% dims the whole card.
         "d": .ok(AccountUsage(session: UsageMetric(utilization: 100, resetsAt: now.addingTimeInterval(3000)),
                               weekly: UsageMetric(utilization: 64, resetsAt: now.addingTimeInterval(400000)),
