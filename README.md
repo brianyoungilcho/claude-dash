@@ -193,7 +193,7 @@ release if the response shape changed. Session keys grant full account access:
 they're stored only in your local Keychain and sent only to claude.ai. Use at
 your own risk.
 
-More: [FAQ](FAQ.md) · [Uninstall](#uninstall) · [Development](#development)
+More: [FAQ](FAQ.md) · [Changelog](CHANGELOG.md) · [Uninstall](#uninstall) · [Development](#development)
 · [Signed updater setup](docs/UPDATER.md)
 
 ## Uninstall
