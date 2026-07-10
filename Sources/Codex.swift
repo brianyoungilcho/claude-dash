@@ -621,12 +621,20 @@ enum CodexMonitor {
     }
 
     private static func currentReadings(jwtPlan: String?) -> [CodexReading] {
-        let active = tokenCountsWithSource(in: rolloutFiles(in: sessionsDir))
-        // Archives can be very large; only inspect them when no active rollout
-        // has a token-count event, preserving the previous common fast path.
-        let rawReadings = active.isEmpty
-            ? tokenCountsWithSource(in: rolloutFiles(in: archivedDir))
-            : active
+        readings(activeFiles: rolloutFiles(in: sessionsDir),
+                 archivedFiles: rolloutFiles(in: archivedDir),
+                 jwtPlan: jwtPlan)
+    }
+
+    /// Merge recent active and archived rollouts before choosing a snapshot.
+    /// Codex can archive a just-finished task while an older task remains in
+    /// `sessions/`; treating either directory as an exclusive fallback would
+    /// make the older percentage win even when the embedded event timestamp
+    /// proves the archive is newer.
+    static func readings(activeFiles: [URL], archivedFiles: [URL],
+                         jwtPlan: String?) -> [CodexReading] {
+        let rawReadings = tokenCountsWithSource(in: activeFiles)
+            + tokenCountsWithSource(in: archivedFiles)
         return rawReadings.compactMap { raw in
             guard let usage = usage(fromRateLimits: raw.rl,
                                     snapshotAt: raw.at,

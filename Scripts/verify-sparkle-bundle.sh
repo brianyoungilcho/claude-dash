@@ -7,12 +7,18 @@ set -euo pipefail
 # intact. Set CLAUDE_DASH_REQUIRE_SPARKLE=1 for a release that must have a
 # configured signed feed.
 APP="${1:-/Applications/Claude Dash.app}"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$APP/Contents/MacOS/ClaudeDash"
 FRAMEWORK="$APP/Contents/Frameworks/Sparkle.framework"
 PLIST="$APP/Contents/Info.plist"
+SPARKLE_LICENSE="$APP/Contents/Resources/Sparkle-LICENSE.txt"
 
 [[ -x "$BIN" ]] || { echo "Missing app executable: $BIN" >&2; exit 1; }
 [[ -x "$FRAMEWORK/Sparkle" ]] || { echo "Missing embedded Sparkle.framework" >&2; exit 1; }
+[[ -s "$SPARKLE_LICENSE" ]] || { echo "Missing bundled Sparkle license notices" >&2; exit 1; }
+cmp -s "$ROOT/Vendor/Sparkle/LICENSE" "$SPARKLE_LICENSE" || {
+  echo "Bundled Sparkle license notices are incomplete" >&2; exit 1
+}
 
 arches="$(/usr/bin/lipo -archs "$BIN")"
 [[ " $arches " == *" arm64 "* && " $arches " == *" x86_64 "* ]] || {

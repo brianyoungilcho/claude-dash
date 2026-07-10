@@ -223,6 +223,7 @@ Login Items**, if one remains.
 | `Sources/main.swift` | App bootstrap, floating panel, menu bar, hotkey, update check |
 | `build.sh` | Universal build, verified Sparkle embedding, nested signing, and bundle assembly |
 | `Scripts/bootstrap-sparkle.sh` | SHA-256-verified pinned Sparkle bootstrap |
+| `Scripts/release-metadata.sh` | Fail-closed production/RC version and feed mapping |
 | `docs/UPDATER.md` | Key, appcast, GitHub Pages, and release-owner instructions |
 | `Tests/main.swift` | Headless tests (CI-safe; live-endpoint check runs locally) |
 | `Preview/main.swift` | Renders the views to PNG for design review |

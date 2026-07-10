@@ -8,9 +8,19 @@ APP="${CLAUDE_DASH_APP_PATH:-/Applications/Claude Dash.app}"
 BIN_NAME="ClaudeDash"
 BUILD="$ROOT/.build"
 VERSION="${CLAUDE_DASH_VERSION:-1.6.0}"
+BUILD_VERSION="${CLAUDE_DASH_BUILD_VERSION:-$VERSION}"
 SPARKLE_ROOT="$ROOT/Vendor/Sparkle"
 SPARKLE_FRAMEWORK="$SPARKLE_ROOT/Sparkle.framework"
 DEFAULT_SPARKLE_FEED_URL="https://brianyoungilcho.github.io/claude-dash/appcast.xml"
+
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+  echo "CLAUDE_DASH_VERSION must be MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-rc.N." >&2
+  exit 1
+fi
+if [[ ! "$BUILD_VERSION" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+  echo "CLAUDE_DASH_BUILD_VERSION must contain one to three numeric components." >&2
+  exit 1
+fi
 
 "$ROOT/Scripts/bootstrap-sparkle.sh"
 
@@ -56,6 +66,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 cp "$BUILD/$BIN_NAME" "$APP/Contents/MacOS/$BIN_NAME"
 cp "$ROOT/Assets/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+cp "$SPARKLE_ROOT/LICENSE" "$APP/Contents/Resources/Sparkle-LICENSE.txt"
 ditto "$SPARKLE_FRAMEWORK" "$APP/Contents/Frameworks/Sparkle.framework"
 
 SPARKLE_PLIST=""
@@ -82,7 +93,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-  <key>CFBundleVersion</key><string>${VERSION}</string>
+  <key>CFBundleVersion</key><string>${BUILD_VERSION}</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSUIElement</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
@@ -122,7 +133,7 @@ sign "$APP"
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
 
 if [[ "$SPARKLE_ENABLED" == "1" ]]; then
-  echo "==> Done: $APP (v${VERSION}, signed Sparkle updates enabled)"
+  echo "==> Done: $APP (v${VERSION}, build ${BUILD_VERSION}, signed Sparkle updates enabled)"
 else
-  echo "==> Done: $APP (v${VERSION}, manual GitHub-release update fallback)"
+  echo "==> Done: $APP (v${VERSION}, build ${BUILD_VERSION}, manual GitHub-release update fallback)"
 fi

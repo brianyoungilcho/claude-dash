@@ -179,6 +179,12 @@ final class AppModel: ObservableObject {
                 usage[id] = .problem(.keychainUnavailable)
                 return
             }
+            // Failure evidence belongs to one credential epoch. A replacement
+            // key must earn its own two auth confirmations and must not inherit
+            // transient backoff from the previous credential.
+            authenticationFailureCounts[id] = nil
+            failureCounts[id] = nil
+            retryNotBefore[id] = nil
             usage[id] = .unknown
         }
         Task { _ = await refresh(accounts[idx], force: true) }
@@ -207,6 +213,7 @@ final class AppModel: ObservableObject {
         authenticationFailureCounts[account.id] = nil
         retryNotBefore[account.id] = nil
         notes.accounts[account.id] = nil
+        if accounts.count < 2 { globalUsageProblem = nil }
         scheduleNotesSave()
         persist()
     }
@@ -337,8 +344,11 @@ final class AppModel: ObservableObject {
     }
 
     private func updateGlobalUsageProblem(_ outcomes: [FetchOutcome], expectedAccountCount: Int) {
-        guard expectedAccountCount >= 2,
-              outcomes.count == expectedAccountCount,
+        guard expectedAccountCount >= 2 else {
+            globalUsageProblem = nil
+            return
+        }
+        guard outcomes.count == expectedAccountCount,
               !outcomes.contains(where: { if case .success = $0 { return true }; return false }),
               !outcomes.contains(where: { if case .skipped = $0 { return true }; return false }) else {
             if outcomes.contains(where: { if case .success = $0 { return true }; return false }) {

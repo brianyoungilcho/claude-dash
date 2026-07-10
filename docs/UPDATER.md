@@ -35,6 +35,8 @@ ce89daf967db1e1893ed3ebd67575ed82d3902563e3191ca92aaec9164fbdef9
 The non-Xcode build embeds `Sparkle.framework`, links it via
 `@executable_path/../Frameworks`, and signs the framework's XPC services,
 Autoupdate helper, Updater app, framework, then outer app in that order.
+The complete Sparkle license/third-party notice file is copied into the app's
+Resources and verified byte-for-byte before packaging.
 
 ## One-time release-owner setup
 
@@ -71,12 +73,14 @@ command, repository, app bundle, issue, or chat.
    gh variable set SPARKLE_PUBLIC_ED_KEY --repo brianyoungilcho/claude-dash \
      --body 'PASTE_THE_PUBLIC_SUPublicEDKey_VALUE'
 
-   key_file="$(mktemp -t claude-dash-sparkle-key)"
-   chmod 600 "$key_file"
+   key_dir="$(mktemp -d -t claude-dash-sparkle-key)"
+   chmod 700 "$key_dir"
+   key_file="$key_dir/private-key"
    ./Vendor/Sparkle/bin/generate_keys --account com.claudedash.app -x "$key_file"
+   chmod 600 "$key_file"
    gh secret set SPARKLE_PRIVATE_ED_KEY --repo brianyoungilcho/claude-dash \
      --env sparkle-release < "$key_file"
-   rm -f "$key_file"
+   rm -rf "$key_dir"
    ```
 
    Keep an encrypted offline backup of the private key before removing any
@@ -91,6 +95,13 @@ command, repository, app bundle, issue, or chat.
    ```text
    https://brianyoungilcho.github.io/claude-dash/appcast.xml
    ```
+
+   Release candidates use the isolated
+   `https://brianyoungilcho.github.io/claude-dash/appcast-rc.xml` feed. A Pages
+   deployment preserves both files, so an RC can never replace or advertise on
+   the production channel. Custom deployments may set `SPARKLE_RC_FEED_URL` in
+   addition to `SPARKLE_FEED_URL`; each URL must map to the corresponding file
+   in the same Pages deployment.
 
    For a custom HTTPS domain served by that same GitHub Pages deployment, set
    `SPARKLE_FEED_URL` as a repository Actions variable before release. It must
@@ -111,7 +122,9 @@ command, repository, app bundle, issue, or chat.
 
 ## Release behavior
 
-Pushing a `v*` tag now performs this order:
+Pushing a valid `vMAJOR.MINOR.PATCH` or `vMAJOR.MINOR.PATCH-rc.N` tag performs
+this order (all release tags share one concurrency lock so feed updates cannot
+race):
 
 1. Bootstrap Sparkle, run the headless tests, build a universal candidate, and
    verify its bundle/signature invariants.
@@ -124,6 +137,11 @@ Pushing a `v*` tag now performs this order:
 5. Deploy the signed appcast through GitHub Pages. If Pages fails, the release
    remains available through the existing manual update path without advertising
    a broken in-app download. The Homebrew cask is updated as before.
+
+RC tags are published as GitHub prereleases, are never marked Latest, never
+bump Homebrew, and use `appcast-rc.xml`. Their numeric `CFBundleVersion` values
+increase from RC1 to RC2 while remaining below the final production build.
+Production tags use `appcast.xml` and reserve the higher final build number.
 
 If neither Sparkle key has been configured, releases keep working but build in
 manual GitHub-release fallback mode. If only one key is configured, the
@@ -147,9 +165,11 @@ path.
 
 Exercise a real two-build RC upgrade after the keys and Pages site exist:
 
-1. Build/publish an RC1 with the public key, install it manually into
-   `/Applications`, and launch it.
-2. Publish an RC2 with a higher `CFBundleVersion`.
+1. Tag and push `v1.6.0-rc.1`. After the workflow succeeds, install its release
+   archive manually into `/Applications` and launch it. It uses build `1060001`
+   and the isolated RC feed.
+2. Tag and push `v1.6.0-rc.2`. It uses higher build `1060002`; the final
+   `v1.6.0` build is `1060099`, so Sparkle ordering remains monotonic.
 3. On RC1 choose **Check for Updates… → Install and Relaunch**.
 4. Verify the app relaunches as RC2 and preserves Keychain keys, account
    metadata, notes, preferences, login-at-startup state, and board frame.

@@ -17,6 +17,7 @@ valid_distribution() {
   [[ -x "$framework/Sparkle" ]] || return 1
   [[ -x "$dir/bin/generate_appcast" ]] || return 1
   [[ -x "$dir/bin/sign_update" ]] || return 1
+  [[ -s "$dir/LICENSE" ]] || return 1
   [[ -f "$info" ]] || return 1
   /usr/bin/codesign --verify --deep --strict "$framework" >/dev/null 2>&1 || return 1
 

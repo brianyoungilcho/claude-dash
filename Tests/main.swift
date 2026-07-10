@@ -435,6 +435,18 @@ if let (rl, at) = CodexMonitor.latestTokenCount(in: [emptyRollout, goodRollout])
     let expected = expectedTS.date(from: "2026-07-08T19:46:56.323Z")!
     check("snapshot timestamp parsed from the event line, not file mtime", abs(at.timeIntervalSince(expected)) < 2)
 } else { check("latestTokenCount found a snapshot", false) }
+
+// A completed newer task may move into archived_sessions while an older task
+// remains active. Both roots must participate in the embedded-timestamp choice.
+let archivedRollout = tmpDir.appendingPathComponent("rollout-archived-newer.jsonl")
+try! """
+{"timestamp":"2026-07-08T20:46:56.323Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":63.0,"window_minutes":43800,"resets_at":1785681569},"plan_type":"team"}}}
+""".write(to: archivedRollout, atomically: true, encoding: .utf8)
+let crossRootReadings = CodexMonitor.readings(activeFiles: [goodRollout],
+                                              archivedFiles: [archivedRollout],
+                                              jwtPlan: nil)
+check("newer archived token_count beats an older still-active task",
+      CodexReading.newest(in: crossRootReadings)?.usage.windows.first?.metric.utilization == 63)
 check("no files → nil", CodexMonitor.latestTokenCount(in: []) == nil)
 try? FileManager.default.removeItem(at: tmpDir)
 
