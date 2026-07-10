@@ -123,7 +123,7 @@ struct MetricLine: View {
     @Environment(\.dashScale) private var s
 
     var body: some View {
-        HStack(spacing: 6 * s) {
+        HStack(alignment: .top, spacing: 6 * s) {
             Text(label)
                 .font(.system(size: 9 * s, weight: .medium)).foregroundStyle(.secondary)
                 .frame(width: 44 * s, alignment: .leading)
@@ -136,7 +136,9 @@ struct MetricLine: View {
             Text(trailing ?? resetString(metric.resetsAt))
                 .font(.system(size: 8 * s)).foregroundStyle(.secondary)
                 .frame(width: 76 * s, alignment: .trailing)
-                .lineLimit(1)
+                .lineLimit(2)
+                .multilineTextAlignment(.trailing)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(label): \(Prefs.pctLabel(metric.utilization)), \(trailing ?? resetString(metric.resetsAt))")
@@ -518,7 +520,11 @@ struct AccountRow: View {
                         Image(systemName: "flag.fill")
                             .font(.system(size: 9 * s)).foregroundStyle(.orange)
                     }
-                    Text(account.displayName).font(.system(size: 12 * s, weight: .semibold))
+                    Text(account.displayName)
+                        .font(.system(size: 12 * s, weight: .semibold))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .layoutPriority(1)
                     Spacer()
                     statusBadge
                 }
@@ -531,7 +537,8 @@ struct AccountRow: View {
                          onChange: noteChanged,
                          onCommit: noteCommitted)
                 Text(account.chromeProfileLabel)
-                    .font(.system(size: 10 * s)).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.system(size: 10 * s)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             VStack(alignment: .trailing, spacing: 5 * s) {
                 Button(action: open) {
@@ -615,6 +622,9 @@ struct AccountRow: View {
                 Spacer()
                 Text(resetString(u.session?.resetsAt))
                     .font(.system(size: 9 * s)).foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.trailing)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(Prefs.pctLabel(session))
                     .font(.system(size: 10 * s, weight: .semibold)).monospacedDigit()
                     .foregroundStyle(usageColor(session))
@@ -647,6 +657,7 @@ struct AccountRow: View {
             Text(problem.display)
                 .font(.system(size: 10 * s))
                 .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
             if problem.needsSignIn {
                 Button("Sign in again", action: edit)
                     .buttonStyle(.borderless)
@@ -796,7 +807,8 @@ struct CodexSection: View {
                     .foregroundStyle(stale ? Color.orange : .secondary)
             }
             if let email = usage.accountEmail, !email.isEmpty {
-                Text(email).font(.system(size: 10 * s)).foregroundStyle(.secondary).lineLimit(1)
+                Text(email).font(.system(size: 10 * s)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             // trailing: recomputes resetString each minute pulse (via `tick`) so
             // the countdown keeps ticking while Codex is idle and the snapshot,
